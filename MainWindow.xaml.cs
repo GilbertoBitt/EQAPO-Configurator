@@ -1,6 +1,7 @@
 ﻿using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Media;
+using System.Windows.Threading;
 using EQAPO_Configurator.Models;
 using EQAPO_Configurator.Services;
 using Wpf.Ui;
@@ -12,15 +13,25 @@ namespace EQAPO_Configurator;
 public partial class MainWindow : Wpf.Ui.Controls.FluentWindow
 {
     private readonly ISnackbarService _snackbarService = new SnackbarService();
+    private readonly DispatcherTimer _gameDetectionTimer;
     private List<GameProfile> _profiles = new();
     private GameProfile? _currentProfile;
     private string? _activeProfileName;
     private DeviceInfo _deviceInfo = new();
+    private string? _lastDetectedGame;
 
     public MainWindow()
     {
         InitializeComponent();
         _snackbarService.SetSnackbarPresenter(SnackbarPresenter);
+
+        // Auto game detection timer — checks every 3 seconds
+        _gameDetectionTimer = new DispatcherTimer
+        {
+            Interval = TimeSpan.FromSeconds(3)
+        };
+        _gameDetectionTimer.Tick += OnGameDetectionTick;
+
         Loaded += MainWindow_Loaded;
     }
 
@@ -36,6 +47,9 @@ public partial class MainWindow : Wpf.Ui.Controls.FluentWindow
 
         // Set initial UI state
         ShowProfilesPage();
+
+        // Start auto game detection
+        _gameDetectionTimer.Start();
     }
 
     // ── Navigation ──
@@ -54,6 +68,14 @@ public partial class MainWindow : Wpf.Ui.Controls.FluentWindow
         EqualizerPage.Visibility = Visibility.Visible;
         DevicePage.Visibility = Visibility.Collapsed;
         UpdateNavButtons("Equalizer");
+
+        // Load the current profile's EQ into the editor
+        if (_currentProfile != null)
+        {
+            var eqProfile = BuildEqProfileFromGameProfile(_currentProfile);
+            EqEditor.LoadProfile(eqProfile);
+            EqProfileNameText.Text = $"— {_currentProfile.Name}";
+        }
     }
 
     private void ShowDevicePage()
@@ -139,7 +161,6 @@ public partial class MainWindow : Wpf.Ui.Controls.FluentWindow
     {
         if (ProfileList.SelectedItem is not null)
         {
-            // Get the profile from the anonymous type
             var selectedItem = ProfileList.SelectedItem;
             var profileProp = selectedItem.GetType().GetProperty("Profile");
             if (profileProp?.GetValue(selectedItem) is GameProfile profile)
@@ -161,7 +182,7 @@ public partial class MainWindow : Wpf.Ui.Controls.FluentWindow
         // In-game tips
         InGameTipsText.Text = string.Join(" • ", profile.InGameSettings.Take(4));
 
-        // Sound category sliders
+        // Sound category sliders — show value next to each slider
         SoundCategoriesPanel.ItemsSource = profile.SoundCategories;
 
         // Preamp
@@ -172,6 +193,48 @@ public partial class MainWindow : Wpf.Ui.Controls.FluentWindow
         bool isActive = profile.Name == _activeProfileName;
         ActivateBtn.Visibility = isActive ? Visibility.Collapsed : Visibility.Visible;
         DeactivateBtn.Visibility = isActive ? Visibility.Visible : Visibility.Collapsed;
+    }
+
+    // ── Build EqProfile from GameProfile ──
+
+    private EqProfile BuildEqProfileFromGameProfile(GameProfile gameProfile)
+    {
+        var eq = EqProfile.CreateDefault10Band();
+        eq.Name = gameProfile.Name;
+
+        // Map sound category slider values to EQ bands
+        if (gameProfile.SoundCategories?.Count > 0)
+        {
+            var bands = new List<EqBand>();
+            int idx = 1;
+            foreach (var cat in gameProfile.SoundCategories)
+            {
+                foreach (var filter in cat.Filters)
+                {
+                    bands.Add(new EqBand
+                    {
+                        Index = idx++,
+                        FilterType = filter.FilterType == "LSC" ? EqFilterType.LSC
+                            : filter.FilterType == "HSC" ? EqFilterType.HSC
+                            : EqFilterType.PK,
+                        Frequency = filter.CenterFrequency,
+                        Gain = filter.BaseGain + filter.UserOffset,
+                        Q = filter.Q,
+                        Enabled = true
+                    });
+                }
+            }
+            if (bands.Count > 0)
+            {
+                // Pad to 10 bands or trim
+                while (bands.Count < 10)
+                    bands.Add(new EqBand { Index = bands.Count + 1, Frequency = 1000 });
+                eq.Bands = bands.Take(10).ToList();
+            }
+        }
+
+        eq.Preamp = gameProfile.Preamp;
+        return eq;
     }
 
     // ── Actions ──
@@ -195,6 +258,9 @@ public partial class MainWindow : Wpf.Ui.Controls.FluentWindow
 
         try
         {
+            // Save any EQ editor changes back to the profile
+            SaveEqEditorToProfile();
+
             ConfigWriter.WriteConfig(_currentProfile);
             _activeProfileName = _currentProfile.Name;
             RefreshProfileList();
@@ -203,6 +269,9 @@ public partial class MainWindow : Wpf.Ui.Controls.FluentWindow
             ActiveProfileLabel.Text = $"Active: {_currentProfile.Name}";
             StatusLabel.Text = $"Active — {_currentProfile.Name}";
             StatusLabel.Foreground = (Brush)FindResource("SystemAccentColor");
+
+            // Show overlay for manually activated profile
+            OverlayService.Show(_currentProfile);
 
             ShowSnackbar($"Activated: {_currentProfile.Name}");
         }
@@ -279,9 +348,91 @@ public partial class MainWindow : Wpf.Ui.Controls.FluentWindow
         window.ShowDialog();
     }
 
+    private void OnToggleOverlay(object sender, RoutedEventArgs e)
+    {
+        OverlayService.IsEnabled = !OverlayService.IsEnabled;
+        OverlayToggleBtn.Appearance = OverlayService.IsEnabled
+            ? Wpf.Ui.Controls.ControlAppearance.Transparent
+            : Wpf.Ui.Controls.ControlAppearance.Secondary;
+
+        if (OverlayService.IsEnabled && _currentProfile != null)
+            OverlayService.Show(_currentProfile);
+        else
+            OverlayService.Hide();
+
+        ShowSnackbar(OverlayService.IsEnabled ? "Overlay enabled" : "Overlay disabled");
+    }
+
     private void OnSettings(object sender, RoutedEventArgs e)
     {
         ShowSnackbar("Settings coming soon");
+    }
+
+    // ── Save EQ Editor Changes ──
+
+    private void SaveEqEditorToProfile()
+    {
+        if (_currentProfile == null || EqEditor?.Profile == null) return;
+
+        var eq = EqEditor.Profile;
+        _currentProfile.Preamp = eq.Preamp;
+
+        // Map EQ bands back to sound category filters
+        int bandIdx = 0;
+        foreach (var cat in _currentProfile.SoundCategories)
+        {
+            foreach (var filter in cat.Filters)
+            {
+                if (bandIdx < eq.Bands.Count)
+                {
+                    var band = eq.Bands[bandIdx];
+                    filter.UserOffset = band.Gain - filter.BaseGain;
+                    bandIdx++;
+                }
+            }
+        }
+    }
+
+    // ── Auto Game Detection ──
+
+    private void OnGameDetectionTick(object? sender, EventArgs e)
+    {
+        try
+        {
+            var runningGame = GameDetector.DetectRunningGame(_profiles);
+
+            if (runningGame != null && runningGame.Name != _lastDetectedGame)
+            {
+                _lastDetectedGame = runningGame.Name;
+
+                // Auto-activate the detected game profile
+                if (_activeProfileName != runningGame.Name)
+                {
+                    _currentProfile = runningGame;
+                    ConfigWriter.WriteConfig(runningGame);
+                    _activeProfileName = runningGame.Name;
+                    RefreshProfileList();
+
+                    ActiveProfileLabel.Text = $"Active: {runningGame.Name}";
+                    StatusLabel.Text = $"Auto — {runningGame.Name}";
+                    StatusLabel.Foreground = (Brush)FindResource("SystemAccentColor");
+
+                    ShowSnackbar($"Auto-detected: {runningGame.Name} — profile activated");
+                }
+
+                // Show overlay
+                OverlayService.Show(runningGame);
+            }
+            else if (runningGame == null && _lastDetectedGame != null)
+            {
+                _lastDetectedGame = null;
+                OverlayService.Hide();
+            }
+        }
+        catch
+        {
+            // Silently ignore detection errors
+        }
     }
 
     // ── Device Info ──

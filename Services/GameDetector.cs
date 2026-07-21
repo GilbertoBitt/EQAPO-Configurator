@@ -1,11 +1,12 @@
 using System.Diagnostics;
+using System.IO;
 using EQAPO_Configurator.Models;
 
 namespace EQAPO_Configurator.Services;
 
 public static class GameDetector
 {
-    public static string? DetectRunningGame(List<GameProfile> profiles)
+    public static GameProfile? DetectRunningGame(List<GameProfile> profiles)
     {
         try
         {
@@ -14,12 +15,13 @@ public static class GameDetector
             {
                 try
                 {
-                    string procName = proc.ProcessName.ToLower() + ".exe";
+                    string procName = proc.ProcessName.ToLower();
                     foreach (var profile in profiles)
                     {
-                        if (procName == profile.GameExe.ToLower())
+                        string exeName = Path.GetFileNameWithoutExtension(profile.GameExe).ToLower();
+                        if (procName == exeName || procName == profile.GameExe.ToLower().Replace(".exe", ""))
                         {
-                            return profile.GameExe;
+                            return profile;
                         }
                     }
                 }

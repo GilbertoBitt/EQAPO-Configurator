@@ -56,6 +56,9 @@ def download_file(url: str, dest: Path) -> bool:
 
 def find_measurement_csv(headphone_name: str) -> str | None:
     """Find the best measurement CSV for a headphone from AutoEQ results README."""
+    import re
+    import urllib.parse
+    
     readme_cache = CACHE_DIR / "results_readme.md"
     
     # Download README if not cached (< 24h)
@@ -67,12 +70,13 @@ def find_measurement_csv(headphone_name: str) -> str | None:
     readme_text = readme_cache.read_text(encoding="utf-8")
     
     # Parse lines like: - [Sennheiser HD 650](./oratory1990/over-ear/Sennheiser%20HD%20650/)
-    import re
     lines = readme_text.split("\n")
     best_match = None
     
     for line in lines:
-        m = re.search(r'\[([^\]]+)\]\(\./([^)]+)\)', line)
+        # Handle names with parentheses like "(wired)" — greedy match for URL
+        # since markdown link always ends with last ) on the line
+        m = re.search(r'\[([^\]]+)\]\(\./(.+)\)', line)
         if m:
             name = m.group(1).strip()
             rel_path = m.group(2).strip()
@@ -86,9 +90,26 @@ def find_measurement_csv(headphone_name: str) -> str | None:
         return None
     
     name, rel_path = best_match
-    # Build CSV download URL (measurement CSVs are at results/{path}/{Name}.csv)
-    import urllib.parse
-    csv_url = f"{AUTOEQ_RAW_BASE}/{rel_path}/{urllib.parse.quote(name)}.csv"
+    
+    # The README markdown syntax has parentheses in names like "(wired)" which
+    # the regex can't distinguish from the closing link paren. The greedy (.+) 
+    # captures everything including the trailing ) of the markdown link.
+    # Fix: strip any trailing ) from the path, then rebuild from the raw name.
+    # GitHub raw URLs use literal parentheses, not %28/%29 encoded.
+    rel_path = rel_path.rstrip(")")
+    
+    # Rebuild the path using the directory portion + raw name (unencoded parens)
+    last_slash = rel_path.rfind("/")
+    if last_slash >= 0:
+        dir_part = rel_path[:last_slash + 1]
+    else:
+        dir_part = ""
+    
+    # URL-encode the name but keep parentheses literal (GitHub requirement)
+    encoded_name = urllib.parse.quote(name, safe="()")
+    rel_path = dir_part + encoded_name
+    
+    csv_url = f"{AUTOEQ_RAW_BASE}/{rel_path}.csv"
     csv_path = MEASUREMENTS_CACHE / f"{name}.csv"
     
     if download_file(csv_url, csv_path):
@@ -166,14 +187,18 @@ def list_headphones(query: str = None) -> list[dict]:
     results = []
     
     for line in readme_text.split("\n"):
-        m = re.search(r'\[([^\]]+)\]\(\./([^)]+)\)', line)
+        m = re.search(r'\[([^\]]+)\]\(\./(.+)\)', line)
         if m:
             name = m.group(1).strip()
-            rel_path = m.group(2).strip()
+            rel_path = m.group(2).strip().rstrip(")")
             
-            # Extract source
-            source_match = re.search(r'\)\s*-\s*(.+)$', line)
-            source = source_match.group(1).strip() if source_match else ""
+            # Extract source (text after last ) on the line, e.g. " - Rtings")
+            source = ""
+            last_paren = line.rfind(")")
+            if last_paren >= 0 and last_paren < len(line) - 1:
+                after = line[last_paren + 1:].strip()
+                if after.startswith("-"):
+                    source = after[1:].strip()
             
             if query is None or query.lower() in name.lower():
                 results.append({"name": name, "source": source, "path": rel_path})
