@@ -32,6 +32,10 @@ public static class AutoEqService
         Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
         "EQAPO-Configurator", "headphones");
 
+    // Bundled profiles ship with the app
+    private static readonly string BundledProfilesDir = Path.Combine(
+        AppDomain.CurrentDomain.BaseDirectory, "Profiles");
+
     // AutoEqApi endpoints (timschneeb/AutoEqApi)
     private static readonly string AutoEqApiBase = "https://autoeqapi.timschneeb.dev";
 
@@ -276,14 +280,14 @@ public static class AutoEqService
     }
 
     /// <summary>
-    /// Get list of locally saved headphone profiles
+    /// Get list of bundled headphone profiles shipped with the app
     /// </summary>
-    public static List<string> GetLocalProfiles()
+    public static List<string> GetBundledProfiles()
     {
         var profiles = new List<string>();
-        if (Directory.Exists(HeadphonesDir))
+        if (Directory.Exists(BundledProfilesDir))
         {
-            foreach (var file in Directory.GetFiles(HeadphonesDir, "*.txt"))
+            foreach (var file in Directory.GetFiles(BundledProfilesDir, "*.txt"))
             {
                 profiles.Add(Path.GetFileNameWithoutExtension(file));
             }
@@ -292,10 +296,51 @@ public static class AutoEqService
     }
 
     /// <summary>
-    /// Load a local headphone profile by name
+    /// Load a bundled headphone profile by name
+    /// </summary>
+    public static HeadphoneEqProfile? LoadBundledProfile(string name)
+    {
+        string filePath = Path.Combine(BundledProfilesDir, name + ".txt");
+        if (!File.Exists(filePath)) return null;
+
+        string content = File.ReadAllText(filePath);
+        var profile = ParseParametricEq(content);
+        if (profile != null)
+            profile.HeadphoneName = name;
+        return profile;
+    }
+
+    /// <summary>
+    /// Get list of locally saved headphone profiles (bundled + user-saved)
+    /// </summary>
+    public static List<string> GetLocalProfiles()
+    {
+        var profiles = new HashSet<string>();
+
+        // Bundled profiles first
+        foreach (var name in GetBundledProfiles())
+            profiles.Add(name);
+
+        // User-saved profiles (override bundled if same name)
+        if (Directory.Exists(HeadphonesDir))
+        {
+            foreach (var file in Directory.GetFiles(HeadphonesDir, "*.txt"))
+                profiles.Add(Path.GetFileNameWithoutExtension(file));
+        }
+
+        return profiles.OrderBy(p => p).ToList();
+    }
+
+    /// <summary>
+    /// Load a headphone profile by name (checks bundled first, then user-saved)
     /// </summary>
     public static HeadphoneEqProfile? LoadLocalProfile(string name)
     {
+        // Check bundled first
+        var bundled = LoadBundledProfile(name);
+        if (bundled != null) return bundled;
+
+        // Then user-saved
         string filePath = Path.Combine(HeadphonesDir, name + ".txt");
         if (!File.Exists(filePath)) return null;
 

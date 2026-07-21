@@ -17,4 +17,8 @@
     <PackageReference Include="WPF-UI" Version="4.3.0" />
   </ItemGroup>
 
+  <ItemGroup>
+    <None Include="Profiles\**\*.txt" CopyToOutputDirectory="PreserveNewest" Link="Profiles\%(RecursiveDir)%(Filename)%(Extension)" />
+  </ItemGroup>
+
 </Project>
