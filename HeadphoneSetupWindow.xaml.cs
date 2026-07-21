@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.IO;
 using System.Windows;
 using System.Windows.Controls;
 using EQAPO_Configurator.Services;
@@ -13,6 +14,8 @@ public partial class HeadphoneSetupWindow : Wpf.Ui.Controls.FluentWindow
     private readonly DeviceInfo _deviceInfo;
     private HeadphoneEqProfile? _downloadedProfile;
     private List<HeadphoneSearchResult> _searchResults = new();
+    private bool _pythonAvailable;
+    private bool _autoeqInstalled;
 
     public HeadphoneSetupWindow(DeviceInfo deviceInfo)
     {
@@ -21,6 +24,39 @@ public partial class HeadphoneSetupWindow : Wpf.Ui.Controls.FluentWindow
         _deviceInfo = deviceInfo;
         LoadDeviceInfo();
         LoadLocalProfiles();
+        _ = DetectPythonAsync();
+    }
+
+    private async Task DetectPythonAsync()
+    {
+        var (pythonOk, autoeqOk, path, error) = await Task.Run(() => PythonService.Detect());
+        _pythonAvailable = pythonOk;
+        _autoeqInstalled = autoeqOk;
+
+        Dispatcher.Invoke(() =>
+        {
+            if (pythonOk && autoeqOk)
+            {
+                PythonStatusText.Text = $"Available ({Path.GetFileName(path)})";
+                PythonStatusText.Foreground = (System.Windows.Media.Brush)FindResource("SystemAccentColor");
+                PythonErrorText.Visibility = Visibility.Collapsed;
+                PythonGenerateBtn.IsEnabled = true;
+            }
+            else if (pythonOk && !autoeqOk)
+            {
+                PythonStatusText.Text = "Python found, autoeq missing";
+                PythonStatusText.Foreground = System.Windows.Media.Brushes.Orange;
+                PythonErrorText.Text = error;
+                PythonErrorText.Visibility = Visibility.Visible;
+            }
+            else
+            {
+                PythonStatusText.Text = "Not available";
+                PythonStatusText.Foreground = System.Windows.Media.Brushes.Gray;
+                PythonErrorText.Text = error;
+                PythonErrorText.Visibility = Visibility.Visible;
+            }
+        });
     }
 
     private void LoadDeviceInfo()
@@ -179,5 +215,51 @@ public partial class HeadphoneSetupWindow : Wpf.Ui.Controls.FluentWindow
     private void OnClose(object sender, RoutedEventArgs e)
     {
         Close();
+    }
+
+    // ── Python AutoEQ Generation ──
+
+    private void OnPythonSearchChanged(object sender, TextChangedEventArgs e)
+    {
+        PythonGenerateBtn.IsEnabled = _autoeqInstalled && PythonSearchBox.Text.Trim().Length >= 2;
+    }
+
+    private async void OnPythonGenerate(object sender, RoutedEventArgs e)
+    {
+        string headphoneName = PythonSearchBox.Text.Trim();
+        if (headphoneName.Length < 2 || !_autoeqInstalled) return;
+
+        PythonGenerateBtn.IsEnabled = false;
+        PythonProgress.Visibility = Visibility.Visible;
+
+        try
+        {
+            var progress = new Progress<string>(msg =>
+            {
+                ShowSnackbar(msg);
+            });
+
+            var profile = await PythonService.GenerateProfileAsync(headphoneName, progress: progress);
+
+            if (profile != null)
+            {
+                _downloadedProfile = profile;
+                ShowProfilePreview(profile);
+                ShowSnackbar($"Generated {profile.Filters.Count} filters for {headphoneName}", 4);
+            }
+            else
+            {
+                ShowSnackbar("Generation returned no filters — try a different headphone name");
+            }
+        }
+        catch (Exception ex)
+        {
+            ShowSnackbar($"Generation failed: {ex.Message}", 5);
+        }
+        finally
+        {
+            PythonGenerateBtn.IsEnabled = true;
+            PythonProgress.Visibility = Visibility.Collapsed;
+        }
     }
 }

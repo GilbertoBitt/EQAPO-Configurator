@@ -19,6 +19,7 @@
 
   <ItemGroup>
     <None Include="Profiles\**\*.txt" CopyToOutputDirectory="PreserveNewest" Link="Profiles\%(RecursiveDir)%(Filename)%(Extension)" />
+    <None Include="python\**\*.py" CopyToOutputDirectory="PreserveNewest" Link="python\%(RecursiveDir)%(Filename)%(Extension)" />
   </ItemGroup>
 
 </Project>
