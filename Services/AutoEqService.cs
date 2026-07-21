@@ -1,7 +1,6 @@
 using System.IO;
 using System.Net.Http;
 using System.Text;
-using System.Text.Json;
 using System.Text.RegularExpressions;
 using EQAPO_Configurator.Models;
 
@@ -10,10 +9,9 @@ namespace EQAPO_Configurator.Services;
 public class HeadphoneSearchResult
 {
     public string Name { get; set; } = "";
-    public string Id { get; set; } = "";
     public string Type { get; set; } = ""; // "over-ear", "in-ear", "earbud"
     public string MeasurementSource { get; set; } = "";
-    public string Target { get; set; } = "Harman 2018";
+    public string DownloadUrl { get; set; } = ""; // Full raw GitHub URL to ParametricEQ.txt
 }
 
 public class HeadphoneEqProfile
@@ -21,7 +19,6 @@ public class HeadphoneEqProfile
     public string HeadphoneName { get; set; } = "";
     public List<FilterMapping> Filters { get; set; } = new();
     public double Preamp { get; set; } = -6.0;
-    public string Target { get; set; } = "";
     public string RawText { get; set; } = "";
 }
 
@@ -31,150 +28,188 @@ public static class AutoEqService
     private static readonly string HeadphonesDir = Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
         "EQAPO-Configurator", "headphones");
+    private static readonly string CacheDir = Path.Combine(
+        Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+        "EQAPO-Configurator", "cache");
 
     // Bundled profiles ship with the app
     private static readonly string BundledProfilesDir = Path.Combine(
         AppDomain.CurrentDomain.BaseDirectory, "Profiles");
 
-    // AutoEqApi endpoints (timschneeb/AutoEqApi)
-    private static readonly string AutoEqApiBase = "https://autoeqapi.timschneeb.dev";
-
-    // AutoEq GitHub raw results
-    private static readonly string AutoEqGitHubBase = "https://raw.githubusercontent.com/jaakkopasanen/AutoEq/master/results";
+    // AutoEq GitHub raw base
+    private static readonly string AutoEqRawBase = "https://raw.githubusercontent.com/jaakkopasanen/AutoEq/master/results";
+    private static readonly string ReadmeUrl = $"{AutoEqRawBase}/README.md";
+    private static readonly string IndexUrl = $"{AutoEqRawBase}/INDEX.md";
 
     private static readonly HttpClient Http = new()
     {
-        Timeout = TimeSpan.FromSeconds(15)
+        Timeout = TimeSpan.FromSeconds(20)
     };
+
+    // In-memory cache of parsed README entries
+    private static List<ReadmeEntry>? _readmeCache;
+    private static readonly object _cacheLock = new();
 
     static AutoEqService()
     {
         Directory.CreateDirectory(HeadphonesDir);
+        Directory.CreateDirectory(CacheDir);
     }
 
     /// <summary>
-    /// Search for headphones by name using AutoEqApi
+    /// A single parsed line from the AutoEQ results README.md
+    /// Format: - [Headphone Name](./source/type/headphone/) - Source
+    /// </summary>
+    private class ReadmeEntry
+    {
+        public string Name { get; set; } = "";
+        public string RelativePath { get; set; } = ""; // e.g. "./oratory1990/over-ear/Sennheiser HD 600/"
+        public string Source { get; set; } = "";
+    }
+
+    /// <summary>
+    /// Download and cache the README.md from AutoEQ, parse all headphone entries
+    /// </summary>
+    private static async Task<List<ReadmeEntry>> GetReadmeEntriesAsync()
+    {
+        lock (_cacheLock)
+        {
+            if (_readmeCache != null) return _readmeCache;
+        }
+
+        string readme = "";
+
+        // Try to use cached file if fresh (< 24h old)
+        string cacheFile = Path.Combine(CacheDir, "autoeq_readme.md");
+        if (File.Exists(cacheFile))
+        {
+            var age = DateTime.UtcNow - File.GetLastWriteTimeUtc(cacheFile);
+            if (age < TimeSpan.FromHours(24))
+                readme = File.ReadAllText(cacheFile);
+        }
+
+        // Download if cache miss
+        if (string.IsNullOrEmpty(readme))
+        {
+            try
+            {
+                readme = await Http.GetStringAsync(ReadmeUrl);
+                File.WriteAllText(cacheFile, readme, Encoding.UTF8);
+            }
+            catch
+            {
+                // If download fails and we have a stale cache, use it
+                if (File.Exists(cacheFile))
+                    readme = File.ReadAllText(cacheFile);
+                else
+                    return new List<ReadmeEntry>();
+            }
+        }
+
+        var entries = new List<ReadmeEntry>();
+
+        // Parse lines like:
+        // - [Sennheiser HD 600](./oratory1990/over-ear/Sennheiser%20HD%20600/) - oratory1990
+        // or with HTML table format:
+        // <tr><td><a href="./oratory1990/over-ear/Sennheiser%20HD%20600/">Sennheiser HD 600</a></td><td>oratory1990</td></tr>
+        var lines = readme.Split('\n');
+        foreach (var line in lines)
+        {
+            // Markdown link format: [Name](./path/)
+            var mdMatch = Regex.Match(line, @"\[([^\]]+)\]\(\./([^)]+)\)");
+            if (mdMatch.Success)
+            {
+                string name = mdMatch.Groups[1].Value.Trim();
+                string relPath = "./" + mdMatch.Groups[2].Value.Trim().TrimEnd('/') + "/";
+
+                // Extract source from the line (usually after " - ")
+                string source = "";
+                var sourceMatch = Regex.Match(line, @"\)\s*-\s*(.+)$");
+                if (sourceMatch.Success)
+                    source = sourceMatch.Groups[1].Value.Trim();
+
+                entries.Add(new ReadmeEntry
+                {
+                    Name = name,
+                    RelativePath = relPath,
+                    Source = source,
+                });
+                continue;
+            }
+
+            // HTML table format: <a href="./path/">Name</a>
+            var htmlMatch = Regex.Match(line, @"href=""\./([^""]+)/""[^>]*>([^<]+)</a>");
+            if (htmlMatch.Success)
+            {
+                string relPath = "./" + htmlMatch.Groups[1].Value.Trim().TrimEnd('/') + "/";
+                string name = htmlMatch.Groups[2].Value.Trim();
+
+                string source = "";
+                var sourceMatch = Regex.Match(line, @"<td>([^<]+)</td>\s*</tr>");
+                if (sourceMatch.Success)
+                    source = sourceMatch.Groups[1].Value.Trim();
+
+                entries.Add(new ReadmeEntry
+                {
+                    Name = name,
+                    RelativePath = relPath,
+                    Source = source,
+                });
+            }
+        }
+
+        lock (_cacheLock)
+        {
+            _readmeCache = entries;
+        }
+
+        return entries;
+    }
+
+    /// <summary>
+    /// Search for headphones by name using AutoEQ README index.
+    /// Returns the recommended (highest accuracy) profile per headphone.
     /// </summary>
     public static async Task<List<HeadphoneSearchResult>> SearchHeadphonesAsync(string query)
     {
         if (string.IsNullOrWhiteSpace(query) || query.Length < 2)
             return new List<HeadphoneSearchResult>();
 
+        var entries = await GetReadmeEntriesAsync();
         var results = new List<HeadphoneSearchResult>();
 
-        try
+        foreach (var entry in entries)
         {
-            // Try AutoEqApi first
-            string url = $"{AutoEqApiBase}/results/search/{Uri.EscapeDataString(query)}";
-            var response = await Http.GetAsync(url);
-            if (response.IsSuccessStatusCode)
+            if (entry.Name.Contains(query, StringComparison.OrdinalIgnoreCase))
             {
-                string json = await response.Content.ReadAsStringAsync();
-                var apiResults = JsonSerializer.Deserialize<List<JsonElement>>(json);
+                string rawUrl = $"{AutoEqRawBase}/{entry.RelativePath.TrimStart('.').TrimStart('/')}/{Uri.EscapeDataString(entry.Name)}%20ParametricEQ.txt";
 
-                if (apiResults != null)
+                results.Add(new HeadphoneSearchResult
                 {
-                    foreach (var item in apiResults.Take(20))
-                    {
-                        results.Add(new HeadphoneSearchResult
-                        {
-                            Name = item.GetProperty("name").GetString() ?? "",
-                            Id = item.GetProperty("id").GetInt64().ToString(),
-                            Type = item.TryGetProperty("type", out var t) ? t.GetString() ?? "" : "",
-                            MeasurementSource = item.TryGetProperty("measurement", out var m) ? m.GetString() ?? "" : "",
-                        });
-                    }
-                    return results;
-                }
+                    Name = entry.Name,
+                    Type = DetectType(entry.RelativePath),
+                    MeasurementSource = entry.Source,
+                    DownloadUrl = rawUrl,
+                });
+
+                if (results.Count >= 25) break;
             }
         }
-        catch { }
-
-        // Fallback: search the GitHub results README
-        try
-        {
-            results = await SearchGitHubResultsAsync(query);
-        }
-        catch { }
-
-        return results;
-    }
-
-    private static async Task<List<HeadphoneSearchResult>> SearchGitHubResultsAsync(string query)
-    {
-        var results = new List<HeadphoneSearchResult>();
-
-        try
-        {
-            // Download the README which lists all headphones
-            string readmeUrl = $"{AutoEqGitHubBase}/README.md";
-            string readme = await Http.GetStringAsync(readmeUrl);
-
-            // Parse headphone names from the list
-            var lines = readme.Split('\n');
-            foreach (var line in lines)
-            {
-                // Look for lines like: - [Headphone Name](./brand/model/)
-                var match = Regex.Match(line, @"\[([^\]]+)\]\(\./[^)]+\)");
-                if (match.Success)
-                {
-                    string name = match.Groups[1].Value;
-                    if (name.Contains(query, StringComparison.OrdinalIgnoreCase))
-                    {
-                        results.Add(new HeadphoneSearchResult
-                        {
-                            Name = name,
-                            Type = line.Contains("in-ear") ? "in-ear" :
-                                   line.Contains("earbud") ? "earbud" : "over-ear",
-                        });
-                    }
-                }
-
-                if (results.Count >= 20) break;
-            }
-        }
-        catch { }
 
         return results;
     }
 
     /// <summary>
-    /// Download the ParametricEQ.txt file for a specific headphone
+    /// Download the ParametricEQ.txt for a specific headphone from AutoEQ GitHub
     /// </summary>
     public static async Task<HeadphoneEqProfile?> DownloadProfileAsync(HeadphoneSearchResult headphone)
     {
-        try
-        {
-            // Try AutoEqApi first
-            if (!string.IsNullOrEmpty(headphone.Id))
-            {
-                string url = $"{AutoEqApiBase}/results/{headphone.Id}";
-                var response = await Http.GetAsync(url);
-                if (response.IsSuccessStatusCode)
-                {
-                    string eqData = await response.Content.ReadAsStringAsync();
-                    var profile = ParseParametricEq(eqData);
-                    if (profile != null)
-                    {
-                        profile.HeadphoneName = headphone.Name;
-                        profile.Target = headphone.Target;
-
-                        // Save locally
-                        SaveLocalProfile(headphone.Name, eqData);
-                        return profile;
-                    }
-                }
-            }
-        }
-        catch { }
+        if (string.IsNullOrEmpty(headphone.DownloadUrl))
+            return null;
 
         try
         {
-            // Fallback: try GitHub raw
-            string safeName = headphone.Name.Replace(" ", "%20");
-            string githubUrl = $"{AutoEqGitHubBase}/oratory1990/harman_over-ear_2018/{safeName}/{safeName} ParametricEQ.txt";
-            string eqData = await Http.GetStringAsync(githubUrl);
-
+            string eqData = await Http.GetStringAsync(headphone.DownloadUrl);
             var profile = ParseParametricEq(eqData);
             if (profile != null)
             {
@@ -189,7 +224,7 @@ public static class AutoEqService
     }
 
     /// <summary>
-    /// Download a raw ParametricEQ.txt file from a URL
+    /// Download a raw ParametricEQ.txt file from any URL
     /// </summary>
     public static async Task<HeadphoneEqProfile?> DownloadFromUrlAsync(string url)
     {
@@ -209,49 +244,40 @@ public static class AutoEqService
     }
 
     /// <summary>
-    /// Parse a ParametricEQ.txt file content into a HeadphoneEqProfile
-    /// Format: Filter N: ON/OFF TYPE Fc XXX Hz Gain X.X dB Q X.XX
+    /// Parse a ParametricEQ.txt content into a HeadphoneEqProfile
+    /// Format: Preamp: -6.1 dB / Filter N: ON PK Fc XXX Hz Gain X.X dB Q X.XX
     /// </summary>
     public static HeadphoneEqProfile? ParseParametricEq(string content)
     {
         if (string.IsNullOrWhiteSpace(content)) return null;
 
-        var profile = new HeadphoneEqProfile
-        {
-            RawText = content
-        };
-
+        var profile = new HeadphoneEqProfile { RawText = content };
         var filters = new List<FilterMapping>();
         int filterIndex = 1;
 
         // Extract preamp
-        var preampMatch = Regex.Match(content, @"Preamp:\s*(-?\d+\.?\d*)\s*dB", RegexOptions.IgnoreCase);
+        var preampMatch = Regex.Match(content, @"Preamp:\s*(-?\d+[.,]?\d*)\s*dB", RegexOptions.IgnoreCase);
         if (preampMatch.Success)
-            profile.Preamp = double.Parse(preampMatch.Groups[1].Value);
-
-        // Parse filter lines
-        var lines = content.Split('\n');
-        foreach (var line in lines)
         {
-            // Match: Filter N: ON/OFF PK/LS/HS/HP/LP Fc XXX Hz Gain X.X dB Q X.XX
-            var filterMatch = Regex.Match(line.Trim(),
-                @"Filter\s+\d+:\s*ON\s+(PK|LS|HS|HP|LP)\s+Fc\s+([\d.]+)\s*Hz\s+Gain\s+(-?[\d.]+)\s*dB\s+Q\s+([\d.]+)",
+            string val = preampMatch.Groups[1].Value.Replace(",", ".");
+            if (double.TryParse(val, System.Globalization.NumberStyles.Float,
+                System.Globalization.CultureInfo.InvariantCulture, out double preamp))
+                profile.Preamp = preamp;
+        }
+
+        // Parse filter lines (dot and comma decimal formats)
+        foreach (var line in content.Split('\n'))
+        {
+            var m = Regex.Match(line.Trim(),
+                @"Filter\s+\d+:\s*ON\s+(PK|LS|HS|HP|LP)\s+Fc\s+([\d.,]+)\s*Hz\s+Gain\s+(-?[\d.,]+)\s*dB\s+Q\s+([\d.,]+)",
                 RegexOptions.IgnoreCase);
 
-            if (!filterMatch.Success)
+            if (m.Success)
             {
-                // Try comma format: Filter  1: ON  PK       Fc    50,0 Hz  Gain   -3,0 dB  Q 10,00
-                filterMatch = Regex.Match(line.Trim(),
-                    @"Filter\s+\d+:\s*ON\s+(PK|LS|HS|HP|LP)\s+Fc\s+([\d,]+)\s*Hz\s+Gain\s+(-?[\d,]+)\s*dB\s+Q\s+([\d,]+)",
-                    RegexOptions.IgnoreCase);
-            }
-
-            if (filterMatch.Success)
-            {
-                string type = filterMatch.Groups[1].Value.ToUpper();
-                string freqStr = filterMatch.Groups[2].Value.Replace(",", ".");
-                string gainStr = filterMatch.Groups[3].Value.Replace(",", ".");
-                string qStr = filterMatch.Groups[4].Value.Replace(",", ".");
+                string type = m.Groups[1].Value.ToUpper();
+                string freqStr = m.Groups[2].Value.Replace(",", ".");
+                string gainStr = m.Groups[3].Value.Replace(",", ".");
+                string qStr = m.Groups[4].Value.Replace(",", ".");
 
                 if (double.TryParse(freqStr, System.Globalization.NumberStyles.Float,
                     System.Globalization.CultureInfo.InvariantCulture, out double freq) &&
@@ -274,30 +300,23 @@ public static class AutoEqService
         }
 
         if (filters.Count == 0) return null;
-
         profile.Filters = filters;
         return profile;
     }
 
-    /// <summary>
-    /// Get list of bundled headphone profiles shipped with the app
-    /// </summary>
+    // ── Bundled + Local profiles ──
+
     public static List<string> GetBundledProfiles()
     {
         var profiles = new List<string>();
         if (Directory.Exists(BundledProfilesDir))
         {
             foreach (var file in Directory.GetFiles(BundledProfilesDir, "*.txt"))
-            {
                 profiles.Add(Path.GetFileNameWithoutExtension(file));
-            }
         }
         return profiles;
     }
 
-    /// <summary>
-    /// Load a bundled headphone profile by name
-    /// </summary>
     public static HeadphoneEqProfile? LoadBundledProfile(string name)
     {
         string filePath = Path.Combine(BundledProfilesDir, name + ".txt");
@@ -305,55 +324,36 @@ public static class AutoEqService
 
         string content = File.ReadAllText(filePath);
         var profile = ParseParametricEq(content);
-        if (profile != null)
-            profile.HeadphoneName = name;
+        if (profile != null) profile.HeadphoneName = name;
         return profile;
     }
 
-    /// <summary>
-    /// Get list of locally saved headphone profiles (bundled + user-saved)
-    /// </summary>
     public static List<string> GetLocalProfiles()
     {
         var profiles = new HashSet<string>();
-
-        // Bundled profiles first
-        foreach (var name in GetBundledProfiles())
-            profiles.Add(name);
-
-        // User-saved profiles (override bundled if same name)
+        foreach (var name in GetBundledProfiles()) profiles.Add(name);
         if (Directory.Exists(HeadphonesDir))
         {
             foreach (var file in Directory.GetFiles(HeadphonesDir, "*.txt"))
                 profiles.Add(Path.GetFileNameWithoutExtension(file));
         }
-
         return profiles.OrderBy(p => p).ToList();
     }
 
-    /// <summary>
-    /// Load a headphone profile by name (checks bundled first, then user-saved)
-    /// </summary>
     public static HeadphoneEqProfile? LoadLocalProfile(string name)
     {
-        // Check bundled first
         var bundled = LoadBundledProfile(name);
         if (bundled != null) return bundled;
 
-        // Then user-saved
         string filePath = Path.Combine(HeadphonesDir, name + ".txt");
         if (!File.Exists(filePath)) return null;
 
         string content = File.ReadAllText(filePath);
         var profile = ParseParametricEq(content);
-        if (profile != null)
-            profile.HeadphoneName = name;
+        if (profile != null) profile.HeadphoneName = name;
         return profile;
     }
 
-    /// <summary>
-    /// Save a headphone profile locally
-    /// </summary>
     public static void SaveLocalProfile(string name, string eqData)
     {
         string safeName = string.Join("_", name.Split(Path.GetInvalidFileNameChars()));
@@ -361,9 +361,6 @@ public static class AutoEqService
         File.WriteAllText(filePath, eqData, Encoding.UTF8);
     }
 
-    /// <summary>
-    /// Delete a local headphone profile
-    /// </summary>
     public static bool DeleteLocalProfile(string name)
     {
         string filePath = Path.Combine(HeadphonesDir, name + ".txt");
@@ -375,9 +372,6 @@ public static class AutoEqService
         return false;
     }
 
-    /// <summary>
-    /// Export a headphone correction file to EqualizerAPO config directory
-    /// </summary>
     public static string ExportToEqualizerApo(HeadphoneEqProfile profile)
     {
         string filename = $"headphone_{profile.HeadphoneName.Replace(" ", "_").ToLower()}.txt";
@@ -386,17 +380,21 @@ public static class AutoEqService
         return filename;
     }
 
+    private static string DetectType(string relativePath)
+    {
+        if (relativePath.Contains("in-ear", StringComparison.OrdinalIgnoreCase)) return "in-ear";
+        if (relativePath.Contains("earbud", StringComparison.OrdinalIgnoreCase)) return "earbud";
+        return "over-ear";
+    }
+
     private static string ExtractNameFromUrl(string url)
     {
         try
         {
             var uri = new Uri(url);
             string lastSegment = Path.GetFileNameWithoutExtension(uri.AbsolutePath);
-            return lastSegment.Replace("%20", " ");
+            return Uri.UnescapeDataString(lastSegment).Replace(" ParametricEQ", "").Trim();
         }
-        catch
-        {
-            return "Unknown Headphone";
-        }
+        catch { return "Unknown Headphone"; }
     }
 }
