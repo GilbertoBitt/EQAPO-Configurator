@@ -1,0 +1,100 @@
+<ui:FluentWindow x:Class="EQAPO_Configurator.AddGameDialog"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:ui="http://schemas.lepo.co/wpfui/2022/xaml"
+        Title="Add Game Profile"
+        Width="520" Height="620"
+        MinWidth="400" MinHeight="500"
+        WindowStartupLocation="CenterOwner"
+        ExtendsContentIntoTitleBar="True"
+        Background="{DynamicResource ApplicationBackgroundBrush}">
+
+    <Grid>
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
+            <RowDefinition Height="Auto" />
+        </Grid.RowDefinitions>
+
+        <ui:TitleBar Grid.Row="0" Title="Add Game Profile" ShowMaximize="False" />
+
+        <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto" Padding="24,8">
+            <StackPanel MaxWidth="450" HorizontalAlignment="Center">
+
+                <!-- Game Info -->
+                <TextBlock Text="Game Information"
+                           FontSize="16"
+                           FontWeight="SemiBold"
+                           Margin="0,0,0,12" />
+
+                <ui:TextBox x:Name="GameNameBox"
+                            PlaceholderText="Game name (e.g. Call of Duty: Black Ops 7)"
+                            Icon="{ui:SymbolIcon Game24}"
+                            Margin="0,0,0,8" />
+
+                <ui:TextBox x:Name="ExeNameBox"
+                            PlaceholderText="Executable (e.g. cod.exe)"
+                            Icon="{ui:SymbolIcon Document24}"
+                            Margin="0,0,0,16" />
+
+                <!-- Genre Selection -->
+                <TextBlock Text="Game Genre (Quick-Start Preset)"
+                           FontSize="16"
+                           FontWeight="SemiBold"
+                           Margin="0,0,0,4" />
+
+                <TextBlock Text="Select a genre to auto-configure EQ sliders with research-backed values"
+                           FontSize="11"
+                           Foreground="{DynamicResource TextFillColorSecondaryBrush}"
+                           Margin="0,0,0,12"
+                           TextWrapping="Wrap" />
+
+                <ui:CardControl x:Name="GenreDescription"
+                                Margin="0,0,0,12"
+                                Padding="12"
+                                Visibility="Collapsed">
+                    <ui:CardControl.Header>
+                        <TextBlock x:Name="GenreDescriptionText"
+                                   FontSize="11"
+                                   Foreground="{DynamicResource TextFillColorSecondaryBrush}"
+                                   TextWrapping="Wrap" />
+                    </ui:CardControl.Header>
+                </ui:CardControl>
+
+                <ItemsControl x:Name="GenrePanel">
+                    <ItemsControl.ItemTemplate>
+                        <DataTemplate>
+                                    <RadioButton x:Name="GenreRadio"
+                                            Content="{Binding Label}"
+                                            Tag="{Binding Key}"
+                                            GroupName="Genre"
+                                            Margin="0,0,0,6"
+                                            Checked="OnGenreChecked" />
+                        </DataTemplate>
+                    </ItemsControl.ItemTemplate>
+                </ItemsControl>
+
+            </StackPanel>
+        </ScrollViewer>
+
+        <!-- Bottom bar -->
+        <Border Grid.Row="2"
+                Background="{DynamicResource CardBackgroundFillColorDefaultBrush}"
+                BorderBrush="{DynamicResource CardStrokeColorDefaultBrush}"
+                BorderThickness="0,1,0,0"
+                Padding="16,10">
+            <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
+                <ui:Button Content="Cancel"
+                           Appearance="Secondary"
+                           Click="OnCancel"
+                           Margin="0,0,8,0" />
+                <ui:Button Content="Add Profile"
+                           Icon="{ui:SymbolIcon Add24}"
+                           Appearance="Primary"
+                           Click="OnAdd" />
+            </StackPanel>
+        </Border>
+
+        <ui:SnackbarPresenter Grid.Row="1" x:Name="SnackbarPresenter" />
+    </Grid>
+</ui:FluentWindow>
