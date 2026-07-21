@@ -18,6 +18,50 @@ jobs:
         with:
           dotnet-version: 10.0.x
 
+      - name: Setup Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install autoeq
+        run: pip install autoeq
+
+      - name: Create bundled Python
+        run: |
+          $embedDir = "python\embedded"
+          New-Item -ItemType Directory -Path $embedDir -Force | Out-Null
+
+          # Download Python 3.11 embedded
+          Invoke-WebRequest -Uri "https://www.python.org/ftp/python/3.11.9/python-3.11.9-embed-amd64.zip" -OutFile "$env:TEMP\python-embed.zip"
+          Expand-Archive -Path "$env:TEMP\python-embed.zip" -DestinationPath $embedDir -Force
+
+          # Enable site-packages
+          $pthFile = "$embedDir\python311._pth"
+          (Get-Content $pthFile -Raw) -replace "#import site", "import site" | Set-Content -Path $pthFile -NoNewline
+
+          # Install pip
+          Invoke-WebRequest -Uri "https://bootstrap.pypa.io/get-pip.py" -OutFile "$embedDir\get-pip.py"
+          & "$embedDir\python.exe" "$embedDir\get-pip.py" --no-warn-script-location
+
+          # Install autoeq into embedded Python
+          & "$embedDir\python.exe" -m pip install autoeq --no-warn-script-location
+
+          # Copy generate_peq.py
+          Copy-Item "python\generate_peq.py" "$embedDir\generate_peq.py"
+
+          # Patch matplotlib imports (not needed for PEQ generation)
+          $fr = "$embedDir\Lib\site-packages\autoeq\frequency_response.py"
+          (Get-Content $fr) -replace '^import matplotlib\.pyplot as plt$', "try:`n    import matplotlib.pyplot as plt`nexcept ImportError:`n    plt = None" | Set-Content $fr
+          (Get-Content $fr) -replace '^import matplotlib\.ticker as ticker$', "try:`n    import matplotlib.ticker as ticker`nexcept ImportError:`n    ticker = None" | Set-Content $fr
+          (Get-Content $fr) -replace '^from PIL import Image$', "try:`n    from PIL import Image`nexcept ImportError:`n    Image = None" | Set-Content $fr
+
+          $peq = "$embedDir\Lib\site-packages\autoeq\peq.py"
+          (Get-Content $peq) -replace '^from matplotlib import pyplot as plt, ticker$', "try:`n    from matplotlib import pyplot as plt, ticker`nexcept ImportError:`n    plt = None`n    ticker = None" | Set-Content $peq
+
+          # Clean up
+          Remove-Item "$embedDir\get-pip.py" -ErrorAction SilentlyContinue
+          Remove-Item "$embedDir\Lib\site-packages\pip" -Recurse -Force -ErrorAction SilentlyContinue
+
       - name: Restore
         run: dotnet restore
 

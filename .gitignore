@@ -27,6 +27,9 @@ bld/
 [Ll]og/
 [Ll]ogs/
 
+## Bundled Python (downloaded at build time)
+python/embedded/
+
 ## VS Code
 .vscode/
 

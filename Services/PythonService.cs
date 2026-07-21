@@ -12,10 +12,11 @@ namespace EQAPO_Configurator.Services;
 /// </summary>
 public static class PythonService
 {
-    private static readonly string PythonDir = Path.Combine(
-        AppDomain.CurrentDomain.BaseDirectory, "python");
-
-    private static readonly string GeneratePeqScript = Path.Combine(PythonDir, "generate_peq.py");
+    // Bundled Python ships with the app — no install required
+    private static readonly string BundledPythonDir = Path.Combine(
+        AppDomain.CurrentDomain.BaseDirectory, "python", "embedded");
+    private static readonly string BundledPythonExe = Path.Combine(BundledPythonDir, "python.exe");
+    private static readonly string BundledScript = Path.Combine(BundledPythonDir, "generate_peq.py");
 
     // Common Python install paths on Windows
     private static readonly string[] PythonPaths = new[]
@@ -30,18 +31,33 @@ public static class PythonService
     private static string? _pythonPath;
 
     /// <summary>
-    /// Detect if Python is available and autoeq is installed
+    /// Detect if Python is available and autoeq is installed.
+    /// Checks bundled Python first, then falls back to system Python.
     /// </summary>
     public static (bool pythonAvailable, bool autoeqInstalled, string pythonPath, string error) Detect()
     {
-        var path = FindPython();
-        if (path == null)
-            return (false, false, "", "Python not found. Install Python 3.11 from python.org");
+        // 1. Check bundled Python first (preferred — no install needed)
+        if (File.Exists(BundledPythonExe) && File.Exists(BundledScript))
+        {
+            try
+            {
+                var result = RunPython(BundledPythonExe, "-c \"import autoeq; print('ok')\"");
+                if (result.ExitCode == 0 && result.Output.Contains("ok"))
+                    return (true, true, BundledPythonExe, "");
+                else
+                    return (true, false, BundledPythonExe, $"Bundled Python found but autoeq failed: {result.Error}");
+            }
+            catch { }
+        }
 
-        if (!File.Exists(GeneratePeqScript))
+        // 2. Fall back to system Python
+        var path = FindSystemPython();
+        if (path == null)
+            return (false, false, "", "Python not found. Install Python 3.11 from python.org or ensure bundled Python is present");
+
+        if (!File.Exists(BundledScript))
             return (true, false, path, "generate_peq.py not found in app directory");
 
-        // Quick check if autoeq is installed
         try
         {
             var result = RunPython(path, "-c \"import autoeq; print('ok')\"");
@@ -65,14 +81,16 @@ public static class PythonService
         string config = "8_PEAKING_WITH_SHELVES",
         IProgress<string>? progress = null)
     {
-        var pythonPath = FindPython();
+        var pythonPath = FindPythonToUse();
         if (pythonPath == null)
             throw new InvalidOperationException("Python not found");
+
+        string scriptPath = File.Exists(BundledScript) ? BundledScript : throw new InvalidOperationException("generate_peq.py not found");
 
         progress?.Report($"Generating EQ for {headphoneName}...");
         progress?.Report("Downloading measurement data from AutoEQ...");
 
-        var args = $"\"{GeneratePeqScript}\" --name \"{headphoneName}\" --target {target} --config {config} --json";
+        var args = $"\"{scriptPath}\" --name \"{headphoneName}\" --target {target} --config {config} --json";
         var result = await RunPythonAsync(pythonPath, args);
 
         if (result.ExitCode != 0)
@@ -129,10 +147,13 @@ public static class PythonService
     /// </summary>
     public static async Task<List<(string Name, string Source)>> ListHeadphonesAsync(string? query = null)
     {
-        var pythonPath = FindPython();
+        var pythonPath = FindPythonToUse();
         if (pythonPath == null) return new List<(string, string)>();
 
-        string args = $"\"{GeneratePeqScript}\" --list --json";
+        string scriptPath = File.Exists(BundledScript) ? BundledScript : "";
+        if (string.IsNullOrEmpty(scriptPath)) return new List<(string, string)>();
+
+        string args = $"\"{scriptPath}\" --list --json";
         if (!string.IsNullOrEmpty(query))
             args += $" --query \"{query}\"";
 
@@ -156,7 +177,16 @@ public static class PythonService
 
     // ── Python detection and execution ──
 
-    private static string? FindPython()
+    private static string? FindPythonToUse()
+    {
+        // Bundled first
+        if (File.Exists(BundledPythonExe))
+            return BundledPythonExe;
+        // Then system
+        return FindSystemPython();
+    }
+
+    private static string? FindSystemPython()
     {
         if (_pythonPath != null && File.Exists(_pythonPath))
             return _pythonPath;

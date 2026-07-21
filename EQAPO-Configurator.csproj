@@ -19,7 +19,18 @@
 
   <ItemGroup>
     <None Include="Profiles\**\*.txt" CopyToOutputDirectory="PreserveNewest" Link="Profiles\%(RecursiveDir)%(Filename)%(Extension)" />
-    <None Include="python\**\*.py" CopyToOutputDirectory="PreserveNewest" Link="python\%(RecursiveDir)%(Filename)%(Extension)" />
+    <None Include="python\generate_peq.py" CopyToOutputDirectory="PreserveNewest" Link="python\embedded\%(Filename)%(Extension)" />
   </ItemGroup>
+
+  <!-- Copy bundled Python to output if it exists in source -->
+  <PropertyGroup>
+    <BundledPythonDir>$(MSBuildProjectDirectory)\python\embedded</BundledPythonDir>
+  </PropertyGroup>
+  <Target Name="CopyBundledPython" AfterTargets="Build" Condition="Exists('$(BundledPythonDir)\python.exe')">
+    <ItemGroup>
+      <PythonFiles Include="$(BundledPythonDir)\**\*" />
+    </ItemGroup>
+    <Copy SourceFiles="@(PythonFiles)" DestinationFiles="@(PythonFiles->'$(OutputPath)python\embedded\%(RecursiveDir)%(Filename)%(Extension)')" SkipUnchangedFiles="true" />
+  </Target>
 
 </Project>
