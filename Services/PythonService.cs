@@ -5,6 +5,8 @@ using System.Text.Json;
 
 namespace EQAPO_Configurator.Services;
 
+public sealed record PythonHeadphoneResult(string Name, string Source);
+
 /// <summary>
 /// Wrapper service that calls the Python autoeq library to generate
 /// dynamic headphone EQ profiles from measurement data.
@@ -145,34 +147,34 @@ public static class PythonService
     /// <summary>
     /// List available headphones from the AutoEQ database
     /// </summary>
-    public static async Task<List<(string Name, string Source)>> ListHeadphonesAsync(string? query = null)
+    public static async Task<List<PythonHeadphoneResult>> ListHeadphonesAsync(string? query = null)
     {
         var pythonPath = FindPythonToUse();
-        if (pythonPath == null) return new List<(string, string)>();
+        if (pythonPath == null) return new();
 
         string scriptPath = File.Exists(BundledScript) ? BundledScript : "";
-        if (string.IsNullOrEmpty(scriptPath)) return new List<(string, string)>();
+        if (string.IsNullOrEmpty(scriptPath)) return new();
 
         string args = $"\"{scriptPath}\" --list --json";
         if (!string.IsNullOrEmpty(query))
             args += $" --query \"{query}\"";
 
         var result = await RunPythonAsync(pythonPath, args);
-        if (result.ExitCode != 0) return new List<(string, string)>();
+        if (result.ExitCode != 0) return new();
 
         try
         {
             var json = JsonDocument.Parse(result.Output);
-            var list = new List<(string, string)>();
+            var list = new List<PythonHeadphoneResult>();
             foreach (var item in json.RootElement.EnumerateArray())
             {
                 string name = item.GetProperty("name").GetString() ?? "";
                 string source = item.GetProperty("source").GetString() ?? "";
-                list.Add((name, source));
+                list.Add(new PythonHeadphoneResult(name, source));
             }
             return list;
         }
-        catch { return new List<(string, string)>(); }
+        catch { return new(); }
     }
 
     // ── Python detection and execution ──

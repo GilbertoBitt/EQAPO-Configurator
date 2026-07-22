@@ -31,11 +31,15 @@ public static class ProfileManager
         try
         {
             string json = File.ReadAllText(ProfilesIndex);
-            var profiles = JsonSerializer.Deserialize<List<GameProfile>>(json, GetOptions());
-            return profiles ?? CreateDefaults();
+            var profiles = JsonSerializer.Deserialize<List<GameProfile>>(json, GetOptions()) ?? CreateDefaults();
+            if (Migrate(profiles))
+                SaveAll(profiles);
+            return profiles;
         }
         catch
         {
+            string backupPath = ProfilesIndex + $".failed-{DateTime.Now:yyyyMMddHHmmss}.bak";
+            try { File.Copy(ProfilesIndex, backupPath, overwrite: false); } catch { }
             return CreateDefaults();
         }
     }
@@ -45,7 +49,57 @@ public static class ProfileManager
         EnsureDirectory();
         var options = GetOptions();
         string json = JsonSerializer.Serialize(profiles, options);
-        File.WriteAllText(ProfilesIndex, json);
+        string tempPath = ProfilesIndex + ".tmp";
+        string backupPath = ProfilesIndex + ".bak";
+        File.WriteAllText(tempPath, json);
+        if (File.Exists(ProfilesIndex))
+            File.Replace(tempPath, ProfilesIndex, backupPath, ignoreMetadataErrors: true);
+        else
+            File.Move(tempPath, ProfilesIndex);
+    }
+
+    private static bool Migrate(List<GameProfile> profiles)
+    {
+        bool changed = false;
+        foreach (var executableGroup in profiles.GroupBy(p => Path.GetFileName(p.GameExe), StringComparer.OrdinalIgnoreCase))
+        {
+            Guid applicationId = executableGroup.Select(p => p.ApplicationId)
+                .FirstOrDefault(id => id != Guid.Empty);
+            if (applicationId == Guid.Empty)
+                applicationId = Guid.NewGuid();
+
+            bool hasDefault = executableGroup.Any(p => p.IsDefaultForApplication);
+            foreach (var profile in executableGroup)
+            {
+                if (profile.Id == Guid.Empty)
+                {
+                    profile.Id = Guid.NewGuid();
+                    changed = true;
+                }
+                if (profile.ApplicationId != applicationId)
+                {
+                    profile.ApplicationId = applicationId;
+                    changed = true;
+                }
+                profile.SoundCategories ??= new();
+                profile.InGameSettings ??= new();
+            }
+
+            if (!hasDefault)
+            {
+                executableGroup.First().IsDefaultForApplication = true;
+                changed = true;
+            }
+
+            bool first = true;
+            foreach (var profile in executableGroup.Where(p => p.IsDefaultForApplication))
+            {
+                if (first) { first = false; continue; }
+                profile.IsDefaultForApplication = false;
+                changed = true;
+            }
+        }
+        return changed;
     }
 
     public static void Save(GameProfile profile)
@@ -91,6 +145,7 @@ public static class ProfileManager
         {
             WriteIndented = true,
             PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
+            PropertyNameCaseInsensitive = true,
         };
     }
 }

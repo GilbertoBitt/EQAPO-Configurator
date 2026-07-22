@@ -11,6 +11,7 @@ public partial class AddGameDialog : Wpf.Ui.Controls.FluentWindow
     private readonly ISnackbarService _snackbarService = new SnackbarService();
     public string GameName { get; private set; } = "";
     public string ExeName { get; private set; } = "";
+    public string ExecutablePath { get; private set; } = "";
     public GameGenre SelectedGenre { get; private set; } = GameGenre.FPS;
 
     private static readonly Dictionary<string, GameGenre> GenreMap = new()
@@ -93,7 +94,8 @@ public partial class AddGameDialog : Wpf.Ui.Controls.FluentWindow
     private void OnAdd(object sender, RoutedEventArgs e)
     {
         GameName = GameNameBox.Text.Trim();
-        ExeName = ExeNameBox.Text.Trim();
+        ExecutablePath = ExeNameBox.Text.Trim();
+        ExeName = System.IO.Path.GetFileName(ExecutablePath);
 
         if (string.IsNullOrEmpty(GameName) || string.IsNullOrEmpty(ExeName))
         {
@@ -105,6 +107,25 @@ public partial class AddGameDialog : Wpf.Ui.Controls.FluentWindow
             ExeName += ".exe";
 
         DialogResult = true;
+    }
+
+    private void OnBrowseExecutable(object sender, RoutedEventArgs e)
+    {
+        var dialog = new Microsoft.Win32.OpenFileDialog
+        {
+            Filter = "Applications (*.exe)|*.exe",
+            CheckFileExists = true,
+            Multiselect = false,
+            Title = "Select application or game"
+        };
+
+        if (dialog.ShowDialog(this) != true)
+            return;
+
+        ExecutablePath = dialog.FileName;
+        ExeNameBox.Text = dialog.FileName;
+        if (string.IsNullOrWhiteSpace(GameNameBox.Text))
+            GameNameBox.Text = System.IO.Path.GetFileNameWithoutExtension(dialog.FileName);
     }
 
     private void OnCancel(object sender, RoutedEventArgs e)

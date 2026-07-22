@@ -10,10 +10,12 @@ public static class BiquadFilter
 {
     public static (double magnitudeReal, double magnitudeImag) Response(EqBand band, double frequency, double sampleRate = 44100)
     {
-        double w0 = 2 * Math.PI * frequency / sampleRate;
-        double cosW0 = Math.Cos(w0);
-        double sinW0 = Math.Sin(w0);
+        double w0c = 2 * Math.PI * band.Frequency / sampleRate;
+        double cosW0 = Math.Cos(w0c);
+        double sinW0 = Math.Sin(w0c);
         double alpha = sinW0 / (2 * band.Q);
+
+        double w0 = 2 * Math.PI * frequency / sampleRate;
 
         double a0, a1, a2, b0, b1, b2;
 

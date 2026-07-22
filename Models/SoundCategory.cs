@@ -1,13 +1,34 @@
+using System.ComponentModel;
+using System.Runtime.CompilerServices;
+
 namespace EQAPO_Configurator.Models;
 
-public class SoundCategory
+public class SoundCategory : INotifyPropertyChanged
 {
+    private double _sliderValue;
     public string Name { get; set; } = "";
     public string Description { get; set; } = "";
     public string Icon { get; set; } = "";
-    public double SliderValue { get; set; } // -12 to +12 dB
+    public double SliderValue
+    {
+        get => _sliderValue;
+        set
+        {
+            if (Math.Abs(_sliderValue - value) < 0.001) return;
+            _sliderValue = value;
+            foreach (var filter in Filters)
+                filter.UserOffset = value - filter.BaseGain;
+            OnPropertyChanged();
+            OnPropertyChanged(nameof(SliderValueText));
+        }
+    }
+    public string SliderValueText => $"{SliderValue:+0.0;-0.0;0.0} dB";
     public string FrequencyRange { get; set; } = "";
     public List<FilterMapping> Filters { get; set; } = new();
+
+    public event PropertyChangedEventHandler? PropertyChanged;
+    private void OnPropertyChanged([CallerMemberName] string? name = null) =>
+        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(name));
 }
 
 public class FilterMapping

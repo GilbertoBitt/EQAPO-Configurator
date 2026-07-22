@@ -1,5 +1,6 @@
 using System.Windows;
 using System.Windows.Interop;
+using EQAPO_Configurator.Models;
 using EQAPO_Configurator.Services;
 
 namespace EQAPO_Configurator.Controls;
@@ -11,47 +12,40 @@ public partial class OverlayWindow : Window
     public OverlayWindow()
     {
         InitializeComponent();
+
+        var settings = AppSettingsService.Load();
+        Spectrum.Visibility = settings.OverlayShowSpectrum ? Visibility.Visible : Visibility.Collapsed;
     }
 
-    private void OnLoaded(object sender, RoutedEventArgs e)
+    private void OnSourceInitialized(object? sender, EventArgs e)
     {
         _hwnd = new WindowInteropHelper(this).Handle;
 
-        // Apply extended window styles for click-through, no Alt+Tab, no focus steal
         IntPtr exStyle = NativeOverlay.GetWindowLong(_hwnd, NativeOverlay.GWL_EXSTYLE);
         exStyle = new IntPtr(
             exStyle.ToInt64()
             | NativeOverlay.WS_EX_TRANSPARENT
             | NativeOverlay.WS_EX_TOOLWINDOW
-            | NativeOverlay.WS_EX_NOACTIVATE
-            | NativeOverlay.WS_EX_NOREDIRECTIONBITMAP);
+            | NativeOverlay.WS_EX_NOACTIVATE);
 
         NativeOverlay.SetWindowLong(_hwnd, NativeOverlay.GWL_EXSTYLE, exStyle);
 
-        // Ensure topmost
         NativeOverlay.SetWindowPos(
             _hwnd, NativeOverlay.HWND_TOPMOST,
             0, 0, 0, 0,
-            NativeOverlay.SWP_NOMOVE | NativeOverlay.SWP_NOSIZE
-            | NativeOverlay.SWP_NOACTIVATE | NativeOverlay.SWP_SHOWWINDOW);
-
-        // DWM "sheet of glass" for smooth compositing
-        var margins = new NativeOverlay.MARGINS
-        {
-            cxLeftWidth = -1, cxRightWidth = -1,
-            cyTopHeight = -1, cyBottomHeight = -1
-        };
-        NativeOverlay.DwmExtendFrameIntoClientArea(_hwnd, ref margins);
-
-        // Disable non-client rendering
-        int policy = 2;
-        NativeOverlay.DwmSetWindowAttribute(_hwnd, NativeOverlay.DWMWA_NCRENDERING_POLICY, ref policy, sizeof(int));
+            NativeOverlay.SWP_NOMOVE | NativeOverlay.SWP_NOSIZE | NativeOverlay.SWP_NOACTIVATE);
     }
 
-    public void SetProfile(string profileName, string genre)
+    private void OnContentRendered(object? sender, EventArgs e)
+    {
+        Dispatcher.BeginInvoke(() => Opacity = 1, System.Windows.Threading.DispatcherPriority.Render);
+    }
+
+    public void SetProfile(string profileName, string genre, string[] categoryNames)
     {
         ProfileNameText.Text = profileName;
         InfoText.Text = genre;
+        BandLevels.SetCategories(categoryNames);
     }
 
     public void SetStatus(string status, string color = "#00CC66")
@@ -61,9 +55,12 @@ public partial class OverlayWindow : Window
             as System.Windows.Media.SolidColorBrush ?? System.Windows.Media.Brushes.LimeGreen;
     }
 
-    /// <summary>
-    /// Re-apply topmost to survive games that reset Z-order.
-    /// </summary>
+    public void UpdateSpectrum(SpectrumFrame frame, CategoryLevel[] levels)
+    {
+        Spectrum.UpdateSpectrum(frame);
+        BandLevels.UpdateCategoryLevels(levels);
+    }
+
     public void EnsureTopmost()
     {
         if (_hwnd != IntPtr.Zero)
@@ -76,12 +73,8 @@ public partial class OverlayWindow : Window
         }
     }
 
-    public void PositionAtCorner(int screenIndex = 0)
+    public void PositionAtCorner()
     {
-        var screen = SystemParameters.PrimaryScreenWidth;
-        var screenH = SystemParameters.PrimaryScreenHeight;
-
-        // Top-right corner with 16px margin
         Left = SystemParameters.PrimaryScreenWidth - Width - 16;
         Top = 16;
     }

@@ -4,6 +4,7 @@ using System.Windows.Media;
 using System.Windows.Threading;
 using EQAPO_Configurator.Models;
 using EQAPO_Configurator.Services;
+using R3;
 using Wpf.Ui;
 using Wpf.Ui.Controls;
 using Wpf.Ui.Appearance;
@@ -14,16 +15,25 @@ public partial class MainWindow : Wpf.Ui.Controls.FluentWindow
 {
     private readonly ISnackbarService _snackbarService = new SnackbarService();
     private readonly DispatcherTimer _gameDetectionTimer;
+    private readonly SpectrumService _spectrumService;
+    private readonly CaptureService _captureService;
     private List<GameProfile> _profiles = new();
     private GameProfile? _currentProfile;
     private string? _activeProfileName;
     private DeviceInfo _deviceInfo = new();
     private string? _lastDetectedGame;
+    private Guid? _preferredRunningApplication;
+    private GameProfile? _profileBeforeAutomaticSwitch;
 
     public MainWindow()
     {
         InitializeComponent();
         _snackbarService.SetSnackbarPresenter(SnackbarPresenter);
+
+        _spectrumService = new SpectrumService();
+        _captureService = new CaptureService(_spectrumService, captureDurationMs: 5000);
+        _captureService.ClipCaptured += OnClipCaptured;
+        _spectrumService.SpectrumUpdated += OnSpectrumUpdated;
 
         // Auto game detection timer — checks every 3 seconds
         _gameDetectionTimer = new DispatcherTimer
@@ -33,6 +43,16 @@ public partial class MainWindow : Wpf.Ui.Controls.FluentWindow
         _gameDetectionTimer.Tick += OnGameDetectionTick;
 
         Loaded += MainWindow_Loaded;
+        Closing += MainWindow_Closing;
+    }
+
+    private void MainWindow_Closing(object? sender, System.ComponentModel.CancelEventArgs e)
+    {
+        _gameDetectionTimer.Stop();
+        OverlayService.StopSpectrumSubscription();
+        _spectrumService?.Stop();
+        _spectrumService?.Dispose();
+        OverlayService.Hide();
     }
 
     private async void MainWindow_Loaded(object sender, RoutedEventArgs e)
@@ -45,11 +65,36 @@ public partial class MainWindow : Wpf.Ui.Controls.FluentWindow
         _profiles = ProfileManager.LoadAll();
         RefreshProfileList();
 
+        // Start spectrum capture
+        if (!_spectrumService.Start())
+        {
+            ShowSnackbar("Spectrum: WASAPI loopback not available — launch audio to enable");
+        }
+
+        // R3 subscription: overlay spectrum via background thread computation
+        OverlayService.StartSpectrumSubscription(_spectrumService);
+
         // Set initial UI state
         ShowProfilesPage();
 
         // Start auto game detection
         _gameDetectionTimer.Start();
+    }
+
+    private void OnSpectrumUpdated(SpectrumFrame frame)
+    {
+        Dispatcher.BeginInvoke(() =>
+        {
+            EqEditor?.UpdateSpectrum(frame);
+        });
+    }
+
+    private void OnClipCaptured(AudioClip clip)
+    {
+        Dispatcher.BeginInvoke(() =>
+        {
+            ShowSnackbar($"Clip captured: {clip.Name} ({clip.DurationSeconds:F1}s)");
+        });
     }
 
     // ── Navigation ──
@@ -109,6 +154,7 @@ public partial class MainWindow : Wpf.Ui.Controls.FluentWindow
             p.GameExe,
             GenreDisplay = p.Genre.GetDescription(),
             IconSymbol = GetGenreIcon(p.Genre),
+            ExecutableIcon = ExecutableIconService.GetIcon(p.ExecutablePath),
             Profile = p,
             IsActive = p.Name == _activeProfileName,
         }).ToList();
@@ -116,20 +162,20 @@ public partial class MainWindow : Wpf.Ui.Controls.FluentWindow
         ProfileList.ItemsSource = displayProfiles;
     }
 
-    private string GetGenreIcon(GameGenre genre) => genre switch
+    private static SymbolRegular GetGenreIcon(GameGenre genre) => genre switch
     {
-        GameGenre.FPS => "TargetArrow24",
-        GameGenre.BattleRoyale => "Globe24",
-        GameGenre.RPG => "Games24",
-        GameGenre.Racing => "CarProfile24",
-        GameGenre.Horror => "WeatherMoon24",
-        GameGenre.MOBA => "Puzzle24",
-        GameGenre.Sports => "Sports24",
-        GameGenre.Action => "Sword24",
-        GameGenre.Stealth => "Eye24",
-        GameGenre.Strategy => "Board24",
-        GameGenre.Music => "MusicNote24",
-        _ => "Game24",
+        GameGenre.FPS => SymbolRegular.TargetArrow24,
+        GameGenre.BattleRoyale => SymbolRegular.Globe24,
+        GameGenre.RPG => SymbolRegular.Games24,
+        GameGenre.Racing => SymbolRegular.VehicleCar24,
+        GameGenre.Horror => SymbolRegular.WeatherMoon24,
+        GameGenre.MOBA => SymbolRegular.PuzzlePiece24,
+        GameGenre.Sports => SymbolRegular.Sport24,
+        GameGenre.Action => SymbolRegular.Fire24,
+        GameGenre.Stealth => SymbolRegular.Eye24,
+        GameGenre.Strategy => SymbolRegular.Board24,
+        GameGenre.Music => SymbolRegular.HeadphonesSoundWave24,
+        _ => SymbolRegular.Games24,
     };
 
     private void OnSearchChanged(object sender, TextChangedEventArgs e)
@@ -152,6 +198,7 @@ public partial class MainWindow : Wpf.Ui.Controls.FluentWindow
             p.GameExe,
             GenreDisplay = p.Genre.GetDescription(),
             IconSymbol = GetGenreIcon(p.Genre),
+            ExecutableIcon = ExecutableIconService.GetIcon(p.ExecutablePath),
             Profile = p,
             IsActive = p.Name == _activeProfileName,
         }).ToList();
@@ -178,12 +225,18 @@ public partial class MainWindow : Wpf.Ui.Controls.FluentWindow
 
         ProfileTitle.Text = profile.Name;
         ProfileSubtitle.Text = $"{profile.Genre.GetDescription()} — {profile.GameExe}";
+        UpdateLayerChain(profile);
 
         // In-game tips
         InGameTipsText.Text = string.Join(" • ", profile.InGameSettings.Take(4));
 
         // Sound category sliders — show value next to each slider
         SoundCategoriesPanel.ItemsSource = profile.SoundCategories;
+        foreach (var category in profile.SoundCategories)
+        {
+            category.PropertyChanged -= OnSoundCategoryChanged;
+            category.PropertyChanged += OnSoundCategoryChanged;
+        }
 
         // Preamp
         PreampSlider.Value = profile.Preamp;
@@ -193,6 +246,21 @@ public partial class MainWindow : Wpf.Ui.Controls.FluentWindow
         bool isActive = profile.Name == _activeProfileName;
         ActivateBtn.Visibility = isActive ? Visibility.Collapsed : Visibility.Visible;
         DeactivateBtn.Visibility = isActive ? Visibility.Visible : Visibility.Collapsed;
+        ApplyBtn.Visibility = isActive ? Visibility.Visible : Visibility.Collapsed;
+    }
+
+    private void UpdateLayerChain(GameProfile profile)
+    {
+        AppSettings settings = AppSettingsService.Load();
+        HeadphoneLayerNameText.Text = string.IsNullOrWhiteSpace(settings.HeadphoneLayerName)
+            ? "Not selected"
+            : settings.HeadphoneLayerName;
+        ApplicationLayerNameText.Text = profile.Name;
+        bool isActive = profile.Name == _activeProfileName;
+        LayerChainStatusText.Text = isActive ? "Active" : "Preview";
+        LayerChainStatusText.Foreground = isActive
+            ? (Brush)FindResource("SystemAccentBrush")
+            : (Brush)FindResource("TextFillColorSecondaryBrush");
     }
 
     // ── Build EqProfile from GameProfile ──
@@ -245,6 +313,7 @@ public partial class MainWindow : Wpf.Ui.Controls.FluentWindow
         if (dialog.ShowDialog() == true)
         {
             var newProfile = GameProfile.CreateDefault(dialog.GameName, dialog.ExeName, dialog.SelectedGenre);
+            newProfile.ExecutablePath = dialog.ExecutablePath;
             _profiles.Add(newProfile);
             ProfileManager.SaveAll(_profiles);
             RefreshProfileList();
@@ -268,7 +337,7 @@ public partial class MainWindow : Wpf.Ui.Controls.FluentWindow
 
             ActiveProfileLabel.Text = $"Active: {_currentProfile.Name}";
             StatusLabel.Text = $"Active — {_currentProfile.Name}";
-            StatusLabel.Foreground = (Brush)FindResource("SystemAccentColor");
+            StatusLabel.Foreground = (Brush)FindResource("SystemAccentBrush");
 
             // Show overlay for manually activated profile
             OverlayService.Show(_currentProfile);
@@ -296,6 +365,22 @@ public partial class MainWindow : Wpf.Ui.Controls.FluentWindow
             StatusLabel.Foreground = (Brush)FindResource("TextFillColorSecondaryBrush");
 
             ShowSnackbar("Deactivated — using Peace GUI");
+        }
+        catch (Exception ex)
+        {
+            ShowSnackbar($"Error: {ex.Message}");
+        }
+    }
+
+    private void OnApplyProfile(object sender, RoutedEventArgs e)
+    {
+        if (_currentProfile == null) return;
+
+        try
+        {
+            SaveEqEditorToProfile();
+            ConfigWriter.WriteConfig(_currentProfile);
+            ShowSnackbar($"Applied: {_currentProfile.Name}");
         }
         catch (Exception ex)
         {
@@ -339,21 +424,59 @@ public partial class MainWindow : Wpf.Ui.Controls.FluentWindow
         }
     }
 
+    private void OnSoundCategoryChanged(object? sender, System.ComponentModel.PropertyChangedEventArgs e)
+    {
+        if (e.PropertyName != nameof(SoundCategory.SliderValue) || _currentProfile == null) return;
+        _currentProfile.LastModified = DateTime.Now;
+        ProfileManager.SaveAll(_profiles);
+    }
+
     private void OnHeadphoneSetup(object sender, RoutedEventArgs e)
     {
         var window = new HeadphoneSetupWindow(_deviceInfo)
         {
             Owner = this
         };
+        window.HeadphoneLayerChanged += OnHeadphoneLayerChanged;
         window.ShowDialog();
+        window.HeadphoneLayerChanged -= OnHeadphoneLayerChanged;
+    }
+
+    private void OnHeadphoneLayerChanged(object? sender, EventArgs e)
+    {
+        GameProfile? active = _profiles.FirstOrDefault(p => p.Name == _activeProfileName) ?? _currentProfile;
+        if (active == null)
+        {
+            try
+            {
+                ConfigWriter.WriteHeadphoneBaseOnly();
+                ShowSnackbar("Headphone base applied globally. Game fine-tuning will layer on top automatically.");
+            }
+            catch (Exception ex)
+            {
+                ShowSnackbar($"Headphone base saved, but could not be applied: {ex.Message}");
+            }
+            return;
+        }
+
+        try
+        {
+            ConfigWriter.WriteConfig(active);
+            if (_currentProfile != null) UpdateLayerChain(_currentProfile);
+            ShowSnackbar($"Headphone base updated; reapplied {active.Name} fine-tuning");
+        }
+        catch (Exception ex)
+        {
+            ShowSnackbar($"Headphone base saved, but active profile could not be reapplied: {ex.Message}");
+        }
     }
 
     private void OnToggleOverlay(object sender, RoutedEventArgs e)
     {
         OverlayService.IsEnabled = !OverlayService.IsEnabled;
         OverlayToggleBtn.Appearance = OverlayService.IsEnabled
-            ? Wpf.Ui.Controls.ControlAppearance.Transparent
-            : Wpf.Ui.Controls.ControlAppearance.Secondary;
+            ? Wpf.Ui.Controls.ControlAppearance.Secondary
+            : Wpf.Ui.Controls.ControlAppearance.Transparent;
 
         if (OverlayService.IsEnabled && _currentProfile != null)
             OverlayService.Show(_currentProfile);
@@ -399,35 +522,57 @@ public partial class MainWindow : Wpf.Ui.Controls.FluentWindow
     {
         try
         {
-            var runningGame = GameDetector.DetectRunningGame(_profiles);
+            IReadOnlyList<GameProfile> running = GameDetector.DetectRunningGames(_profiles);
 
-            if (runningGame != null && runningGame.Name != _lastDetectedGame)
+            if (running.Count == 0)
             {
-                _lastDetectedGame = runningGame.Name;
-
-                // Auto-activate the detected game profile
-                if (_activeProfileName != runningGame.Name)
+                if (_lastDetectedGame != null)
                 {
-                    _currentProfile = runningGame;
-                    ConfigWriter.WriteConfig(runningGame);
-                    _activeProfileName = runningGame.Name;
+                    _lastDetectedGame = null;
+                    _preferredRunningApplication = null;
+                    OverlayService.Hide();
+                    GameProfile? fallback = _profiles.FirstOrDefault(p => p.IsGlobalDefault) ?? _profileBeforeAutomaticSwitch;
+                    if (fallback != null)
+                    {
+                        ConfigWriter.WriteConfig(fallback);
+                        _activeProfileName = fallback.Name;
+                        ActiveProfileLabel.Text = $"Active: {fallback.Name}";
+                    }
+                    else
+                    {
+                        ConfigWriter.WriteToPeace();
+                        _activeProfileName = null;
+                        ActiveProfileLabel.Text = "No active profile";
+                    }
                     RefreshProfileList();
-
-                    ActiveProfileLabel.Text = $"Active: {runningGame.Name}";
-                    StatusLabel.Text = $"Auto — {runningGame.Name}";
-                    StatusLabel.Foreground = (Brush)FindResource("SystemAccentColor");
-
-                    ShowSnackbar($"Auto-detected: {runningGame.Name} — profile activated");
+                    _profileBeforeAutomaticSwitch = null;
                 }
+                return;
+            }
 
-                // Show overlay
-                OverlayService.Show(runningGame);
-            }
-            else if (runningGame == null && _lastDetectedGame != null)
+            GameProfile? runningGame = running.FirstOrDefault(p => p.ApplicationId == _preferredRunningApplication);
+            if (runningGame == null && running.Count > 1)
             {
-                _lastDetectedGame = null;
-                OverlayService.Hide();
+                var dialog = new ApplicationChoiceDialog(running) { Owner = this };
+                if (dialog.ShowDialog() != true || dialog.SelectedProfile == null) return;
+                runningGame = dialog.SelectedProfile;
             }
+            runningGame ??= running[0];
+            _preferredRunningApplication = runningGame.ApplicationId;
+            if (runningGame.Name == _lastDetectedGame) return;
+
+            _profileBeforeAutomaticSwitch ??= _profiles.FirstOrDefault(p => p.Name == _activeProfileName);
+            _lastDetectedGame = runningGame.Name;
+            _currentProfile = runningGame;
+            ConfigWriter.WriteConfig(runningGame);
+            _activeProfileName = runningGame.Name;
+            RefreshProfileList();
+            ActiveProfileLabel.Text = $"Active: {runningGame.Name}";
+            StatusLabel.Text = $"Auto — {runningGame.Name}";
+            StatusLabel.Foreground = (Brush)FindResource("SystemAccentBrush");
+            ShowSnackbar($"Auto-detected: {runningGame.Name} — profile activated");
+            OverlayService.Show(runningGame);
+            UpdateLayerChain(runningGame);
         }
         catch
         {

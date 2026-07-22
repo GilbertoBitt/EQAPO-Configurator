@@ -3,6 +3,7 @@ using System.IO;
 using System.Windows;
 using System.Windows.Controls;
 using EQAPO_Configurator.Services;
+using EQAPO_Configurator.Models;
 using Wpf.Ui;
 using Wpf.Ui.Controls;
 
@@ -10,12 +11,13 @@ namespace EQAPO_Configurator;
 
 public partial class HeadphoneSetupWindow : Wpf.Ui.Controls.FluentWindow
 {
+    public event EventHandler? HeadphoneLayerChanged;
     private readonly ISnackbarService _snackbarService = new SnackbarService();
     private readonly DeviceInfo _deviceInfo;
     private HeadphoneEqProfile? _downloadedProfile;
-    private List<HeadphoneSearchResult> _searchResults = new();
     private bool _pythonAvailable;
     private bool _autoeqInstalled;
+    private CancellationTokenSource? _searchDebounce;
 
     public HeadphoneSetupWindow(DeviceInfo deviceInfo)
     {
@@ -23,8 +25,17 @@ public partial class HeadphoneSetupWindow : Wpf.Ui.Controls.FluentWindow
         _snackbarService.SetSnackbarPresenter(SnackbarPresenter);
         _deviceInfo = deviceInfo;
         LoadDeviceInfo();
+        LoadActiveHeadphoneLayer();
         LoadLocalProfiles();
         _ = DetectPythonAsync();
+    }
+
+    private void LoadActiveHeadphoneLayer()
+    {
+        AppSettings settings = AppSettingsService.Load();
+        ActiveHeadphoneLayerText.Text = string.IsNullOrWhiteSpace(settings.HeadphoneLayerName)
+            ? "No selected profile"
+            : settings.HeadphoneLayerName;
     }
 
     private async Task DetectPythonAsync()
@@ -38,9 +49,8 @@ public partial class HeadphoneSetupWindow : Wpf.Ui.Controls.FluentWindow
             if (pythonOk && autoeqOk)
             {
                 PythonStatusText.Text = $"Available ({Path.GetFileName(path)})";
-                PythonStatusText.Foreground = (System.Windows.Media.Brush)FindResource("SystemAccentColor");
+                PythonStatusText.Foreground = (System.Windows.Media.Brush)FindResource("SystemAccentBrush");
                 PythonErrorText.Visibility = Visibility.Collapsed;
-                PythonGenerateBtn.IsEnabled = true;
             }
             else if (pythonOk && !autoeqOk)
             {
@@ -61,19 +71,64 @@ public partial class HeadphoneSetupWindow : Wpf.Ui.Controls.FluentWindow
 
     private void LoadDeviceInfo()
     {
-        DetectedDeviceText.Text = _deviceInfo.DeviceName == "Unknown Device"
-            ? "No EqualizerAPO device detected — run the Configurator to set one up"
-            : _deviceInfo.DeviceName;
+        if (_deviceInfo.DeviceName == "NotInstalled")
+        {
+            DetectedDeviceText.Text = "EqualizerAPO is not installed — download it from sourceforge.net/projects/equalizerapo";
+        }
+        else if (_deviceInfo.DeviceName == "Unknown Device")
+        {
+            DetectedDeviceText.Text = "No device configured — run the EqualizerAPO Configurator to set up a device";
+        }
+        else
+        {
+            DetectedDeviceText.Text = _deviceInfo.DeviceName;
+        }
 
-        DetectedModeText.Text = _deviceInfo.IsSurroundSound
-            ? $"Surround Sound ({_deviceInfo.ChannelCount}.0 channels) — stereo recommended for gaming"
-            : "Stereo Headphones — ideal for competitive gaming";
+        if (_deviceInfo.DeviceName == "NotInstalled")
+        {
+            DetectedModeText.Text = "Install EqualizerAPO to enable EQ functionality";
+        }
+        else
+        {
+            DetectedModeText.Text = _deviceInfo.IsSurroundSound
+                ? $"Surround Sound ({_deviceInfo.ChannelCount}.0 channels) — stereo recommended for gaming"
+                : "Stereo Headphones — ideal for competitive gaming";
+        }
+    }
+
+    private async void OnOpenDeviceSelector(object sender, RoutedEventArgs e)
+    {
+        try
+        {
+            Process? process = EqualizerApoService.OpenDeviceSelector();
+            if (process == null)
+            {
+                ShowSnackbar("EqualizerAPO Device Selector was not found");
+                return;
+            }
+
+            await process.WaitForExitAsync();
+            var refreshed = DeviceDetector.DetectCurrentDevice();
+            DetectedDeviceText.Text = DeviceDetector.GetDeviceDisplayName(refreshed);
+            ShowSnackbar("Device configuration refreshed");
+        }
+        catch (Exception ex)
+        {
+            ShowSnackbar($"Could not open Device Selector: {ex.Message}", 5);
+        }
     }
 
     private void LoadLocalProfiles()
     {
+        AppSettings settings = AppSettingsService.Load();
+        string activeName = settings.HeadphoneLayerName ?? "";
         var profiles = AutoEqService.GetLocalProfiles();
-        LocalProfilesPanel.ItemsSource = profiles.Any() ? profiles : new List<string> { "(No saved profiles)" };
+        var items = profiles.Select(name => new
+        {
+            Name = name,
+            IsActive = string.Equals(name, activeName, StringComparison.OrdinalIgnoreCase)
+        }).ToList();
+        LocalProfilesPanel.ItemsSource = items.Any() ? items : new[] { new { Name = "(No saved profiles)", IsActive = false } };
     }
 
     // ── Snackbar ──
@@ -85,9 +140,25 @@ public partial class HeadphoneSetupWindow : Wpf.Ui.Controls.FluentWindow
 
     // ── Search ──
 
-    private void OnSearchTextChanged(object sender, TextChangedEventArgs e)
+    private async void OnSearchTextChanged(object sender, TextChangedEventArgs e)
     {
-        SearchBtn.IsEnabled = HeadphoneSearchBox.Text.Trim().Length >= 2;
+        string query = HeadphoneSearchBox.Text.Trim();
+        SearchBtn.IsEnabled = query.Length >= 2;
+        _searchDebounce?.Cancel();
+        _searchDebounce?.Dispose();
+        _searchDebounce = new CancellationTokenSource();
+        if (query.Length < 2)
+        {
+            SearchResultsList.Visibility = Visibility.Collapsed;
+            return;
+        }
+
+        try
+        {
+            await Task.Delay(300, _searchDebounce.Token);
+            await SearchAsync(query, _searchDebounce.Token);
+        }
+        catch (OperationCanceledException) { }
     }
 
     private async void OnSearchClick(object sender, RoutedEventArgs e)
@@ -95,21 +166,49 @@ public partial class HeadphoneSetupWindow : Wpf.Ui.Controls.FluentWindow
         string query = HeadphoneSearchBox.Text.Trim();
         if (query.Length < 2) return;
 
-        SearchLoading.Visibility = Visibility.Visible;
-        SearchResultsList.Visibility = Visibility.Collapsed;
+        await SearchAsync(query, CancellationToken.None);
+    }
 
+    private async Task SearchAsync(string query, CancellationToken cancellationToken)
+    {
+        SearchLoading.Visibility = Visibility.Visible;
         try
         {
-            _searchResults = await AutoEqService.SearchHeadphonesAsync(query);
+            Task<List<HeadphoneSearchResult>> downloadTask = AutoEqService.SearchHeadphonesAsync(query);
+            Task<List<PythonHeadphoneResult>>? generateTask = _autoeqInstalled
+                ? PythonService.ListHeadphonesAsync(query)
+                : null;
+            await downloadTask;
+            if (generateTask != null) await generateTask;
+            cancellationToken.ThrowIfCancellationRequested();
 
-            if (_searchResults.Any())
+            var results = downloadTask.Result.Select(result => new UnifiedHeadphoneSearchResult
             {
-                SearchResultsList.ItemsSource = _searchResults;
+                Name = result.Name,
+                Detail = $"Existing profile · {result.Type} · {result.MeasurementSource}",
+                ActionLabel = "Download",
+                Action = HeadphoneProfileAction.Download,
+                DownloadResult = result
+            }).Concat((generateTask?.Result ?? new()).Select(result => new UnifiedHeadphoneSearchResult
+            {
+                Name = result.Name,
+                Detail = $"Generate with Python · {result.Source}",
+                ActionLabel = "Generate",
+                Action = HeadphoneProfileAction.Generate
+            }))
+            .GroupBy(result => (result.Name, result.Action))
+            .Select(group => group.First())
+            .Take(40)
+            .ToList();
+
+            if (results.Count > 0)
+            {
+                SearchResultsList.ItemsSource = results;
                 SearchResultsList.Visibility = Visibility.Visible;
             }
             else
             {
-                ShowSnackbar("No results found — try a different search term");
+                SearchResultsList.Visibility = Visibility.Collapsed;
             }
         }
         catch (Exception ex)
@@ -122,21 +221,34 @@ public partial class HeadphoneSetupWindow : Wpf.Ui.Controls.FluentWindow
         }
     }
 
-    private async void OnSearchResultSelected(object sender, SelectionChangedEventArgs e)
+    private async void OnUseUnifiedSearchResult(object sender, RoutedEventArgs e)
     {
-        if (SearchResultsList.SelectedItem is not HeadphoneSearchResult selected)
+        if (sender is not Wpf.Ui.Controls.Button { Tag: UnifiedHeadphoneSearchResult selected })
             return;
 
         SearchLoading.Visibility = Visibility.Visible;
+        if (selected.Action == HeadphoneProfileAction.Generate)
+            PythonProgress.Visibility = Visibility.Visible;
         ProfilePreviewPanel.Visibility = Visibility.Collapsed;
 
         try
         {
-            _downloadedProfile = await AutoEqService.DownloadProfileAsync(selected);
+            _downloadedProfile = selected.Action switch
+            {
+                HeadphoneProfileAction.Download when selected.DownloadResult != null =>
+                    await AutoEqService.DownloadProfileAsync(selected.DownloadResult),
+                HeadphoneProfileAction.Generate when _autoeqInstalled =>
+                    await PythonService.GenerateProfileAsync(selected.Name),
+                _ => null
+            };
 
             if (_downloadedProfile != null)
             {
+                ApplyAsBaseLayer(_downloadedProfile);
                 ShowProfilePreview(_downloadedProfile);
+                ShowSnackbar(selected.Action == HeadphoneProfileAction.Download
+                    ? $"Downloaded and applied {selected.Name} as the headphone base"
+                    : $"Generated and applied {selected.Name} as the headphone base", 5);
             }
             else
             {
@@ -150,6 +262,7 @@ public partial class HeadphoneSetupWindow : Wpf.Ui.Controls.FluentWindow
         finally
         {
             SearchLoading.Visibility = Visibility.Collapsed;
+            PythonProgress.Visibility = Visibility.Collapsed;
         }
     }
 
@@ -190,7 +303,26 @@ public partial class HeadphoneSetupWindow : Wpf.Ui.Controls.FluentWindow
     {
         if (_downloadedProfile == null) return;
 
-        ShowSnackbar("Headphone profile ready — it will be used as Layer 1 (correction) when you activate a game profile", 5);
+        try
+        {
+            ApplyAsBaseLayer(_downloadedProfile);
+            ShowSnackbar("Headphone correction applied as the active Layer 1 profile", 5);
+        }
+        catch (Exception ex)
+        {
+            ShowSnackbar($"Could not activate headphone layer: {ex.Message}", 5);
+        }
+    }
+
+    private void ApplyAsBaseLayer(HeadphoneEqProfile profile)
+    {
+        string filename = AutoEqService.ExportToEqualizerApo(profile);
+        AppSettings settings = AppSettingsService.Load();
+        settings.HeadphoneLayerFilename = filename;
+        settings.HeadphoneLayerName = profile.HeadphoneName;
+        AppSettingsService.Save(settings);
+        ActiveHeadphoneLayerText.Text = profile.HeadphoneName;
+        HeadphoneLayerChanged?.Invoke(this, EventArgs.Empty);
     }
 
     private void OnDeleteLocalProfile(object sender, RoutedEventArgs e)
@@ -200,6 +332,29 @@ public partial class HeadphoneSetupWindow : Wpf.Ui.Controls.FluentWindow
             AutoEqService.DeleteLocalProfile(name);
             LoadLocalProfiles();
             ShowSnackbar($"Deleted: {name}", 2);
+        }
+    }
+
+    private void OnSelectLocalProfile(object sender, RoutedEventArgs e)
+    {
+        if (sender is not Wpf.Ui.Controls.Button btn || btn.Tag is not string name)
+            return;
+
+        var profile = AutoEqService.LoadLocalProfile(name);
+        if (profile == null)
+        {
+            ShowSnackbar($"Could not load profile: {name}", 4);
+            return;
+        }
+
+        try
+        {
+            ApplyAsBaseLayer(profile);
+            ShowSnackbar($"Activated '{name}' as the headphone base layer", 5);
+        }
+        catch (Exception ex)
+        {
+            ShowSnackbar($"Failed to activate profile: {ex.Message}", 5);
         }
     }
 
@@ -217,49 +372,4 @@ public partial class HeadphoneSetupWindow : Wpf.Ui.Controls.FluentWindow
         Close();
     }
 
-    // ── Python AutoEQ Generation ──
-
-    private void OnPythonSearchChanged(object sender, TextChangedEventArgs e)
-    {
-        PythonGenerateBtn.IsEnabled = _autoeqInstalled && PythonSearchBox.Text.Trim().Length >= 2;
-    }
-
-    private async void OnPythonGenerate(object sender, RoutedEventArgs e)
-    {
-        string headphoneName = PythonSearchBox.Text.Trim();
-        if (headphoneName.Length < 2 || !_autoeqInstalled) return;
-
-        PythonGenerateBtn.IsEnabled = false;
-        PythonProgress.Visibility = Visibility.Visible;
-
-        try
-        {
-            var progress = new Progress<string>(msg =>
-            {
-                ShowSnackbar(msg);
-            });
-
-            var profile = await PythonService.GenerateProfileAsync(headphoneName, progress: progress);
-
-            if (profile != null)
-            {
-                _downloadedProfile = profile;
-                ShowProfilePreview(profile);
-                ShowSnackbar($"Generated {profile.Filters.Count} filters for {headphoneName}", 4);
-            }
-            else
-            {
-                ShowSnackbar("Generation returned no filters — try a different headphone name");
-            }
-        }
-        catch (Exception ex)
-        {
-            ShowSnackbar($"Generation failed: {ex.Message}", 5);
-        }
-        finally
-        {
-            PythonGenerateBtn.IsEnabled = true;
-            PythonProgress.Visibility = Visibility.Collapsed;
-        }
-    }
 }

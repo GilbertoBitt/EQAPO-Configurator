@@ -29,13 +29,23 @@
 
                 <ui:TextBox x:Name="GameNameBox"
                             PlaceholderText="Game name (e.g. Call of Duty: Black Ops 7)"
-                            Icon="{ui:SymbolIcon Game24}"
+                            Icon="{ui:SymbolIcon Games24}"
                             Margin="0,0,0,8" />
 
-                <ui:TextBox x:Name="ExeNameBox"
-                            PlaceholderText="Executable (e.g. cod.exe)"
-                            Icon="{ui:SymbolIcon Document24}"
-                            Margin="0,0,0,16" />
+                <Grid Margin="0,0,0,16">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="Auto" />
+                    </Grid.ColumnDefinitions>
+                    <ui:TextBox x:Name="ExeNameBox"
+                                PlaceholderText="Select the application executable"
+                                Icon="{ui:SymbolIcon Document24}"
+                                IsReadOnly="True" />
+                    <ui:Button Grid.Column="1"
+                               Content="Browse"
+                               Click="OnBrowseExecutable"
+                               Margin="8,0,0,0" />
+                </Grid>
 
                 <!-- Genre Selection -->
                 <TextBlock Text="Game Genre (Quick-Start Preset)"

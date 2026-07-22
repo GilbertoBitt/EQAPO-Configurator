@@ -42,13 +42,17 @@
 
         <!-- Main Content -->
         <Grid Grid.Row="1">
+            <Grid.RowDefinitions>
+                <RowDefinition Height="*" />
+                <RowDefinition Height="Auto" />
+            </Grid.RowDefinitions>
             <Grid.ColumnDefinitions>
                 <ColumnDefinition Width="260" MinWidth="200" />
                 <ColumnDefinition Width="*" />
             </Grid.ColumnDefinitions>
 
             <!-- Left Sidebar -->
-            <Border Grid.Column="0"
+            <Border Grid.Row="0" Grid.Column="0"
                     Background="{DynamicResource CardBackgroundFillColorDefaultBrush}"
                     BorderBrush="{DynamicResource CardStrokeColorDefaultBrush}"
                     BorderThickness="0,0,1,0">
@@ -58,6 +62,7 @@
                         <RowDefinition Height="Auto" />
                         <RowDefinition Height="Auto" />
                         <RowDefinition Height="*" />
+                        <RowDefinition Height="Auto" />
                     </Grid.RowDefinitions>
 
                     <!-- Nav Header -->
@@ -72,7 +77,7 @@
                     <StackPanel Grid.Row="1">
                         <ui:Button x:Name="NavProfiles"
                                    Content="  Profiles"
-                                   Icon="{ui:SymbolIcon Game24}"
+                                   Icon="{ui:SymbolIcon Games24}"
                                    Appearance="Primary"
                                    Click="OnNavProfiles"
                                    HorizontalAlignment="Stretch"
@@ -107,23 +112,13 @@
                                 Margin="8,8,8,4"
                                 TextChanged="OnSearchChanged" />
 
-                    <!-- Add Button -->
-                    <ui:Button Grid.Row="3"
-                              x:Name="AddGameBtn"
-                              Content="Add Game"
-                              Icon="{ui:SymbolIcon Add24}"
-                              Appearance="Primary"
-                              Click="OnAddGame"
-                              Margin="8,4,8,8"
-                              HorizontalAlignment="Stretch" />
-
                     <!-- Profile List -->
                     <ListBox x:Name="ProfileList"
                              Grid.Row="3"
                              SelectionChanged="OnProfileSelected"
                              BorderThickness="0"
                              Background="Transparent"
-                             Margin="0,48,0,0"
+                             Margin="0,4,0,0"
                              ScrollViewer.HorizontalScrollBarVisibility="Disabled">
                         <ListBox.ItemTemplate>
                             <DataTemplate>
@@ -137,11 +132,15 @@
                                             <ColumnDefinition Width="*" />
                                             <ColumnDefinition Width="Auto" />
                                         </Grid.ColumnDefinitions>
-                                         <TextBlock Grid.Column="0"
-                                                    Text="{Binding IconSymbol}"
-                                                    FontSize="18"
-                                                    Margin="0,0,10,0"
-                                                    VerticalAlignment="Center" />
+                                         <Grid Grid.Column="0" Width="26" Height="26" Margin="0,0,10,0">
+                                             <ui:SymbolIcon Symbol="{Binding IconSymbol}"
+                                                            FontSize="20"
+                                                            HorizontalAlignment="Center"
+                                                            VerticalAlignment="Center" />
+                                             <Image Source="{Binding ExecutableIcon}"
+                                                    Width="24" Height="24"
+                                                    Stretch="Uniform" />
+                                         </Grid>
                                         <StackPanel Grid.Column="1" VerticalAlignment="Center">
                                             <TextBlock Text="{Binding Name}"
                                                        FontSize="13"
@@ -156,7 +155,7 @@
                                                    Text="✓"
                                                    FontSize="14"
                                                    x:Name="ActiveIcon"
-                                                   Foreground="{DynamicResource SystemAccentColor}"
+                                                   Foreground="{DynamicResource SystemAccentBrush}"
                                                    Visibility="Collapsed"
                                                    VerticalAlignment="Center" />
                                     </Grid>
@@ -164,21 +163,27 @@
                             </DataTemplate>
                         </ListBox.ItemTemplate>
                     </ListBox>
+                    <ui:Button Grid.Row="4"
+                               x:Name="AddGameBtn"
+                               Content="Add application"
+                               Icon="{ui:SymbolIcon Add24}"
+                               Appearance="Primary"
+                               Click="OnAddGame"
+                               Margin="8,8,8,10"
+                               HorizontalAlignment="Stretch" />
                 </Grid>
             </Border>
 
             <!-- Right: Content Area -->
-            <Border Grid.Column="1"
+            <Border Grid.Row="0" Grid.Column="1"
                     Background="{DynamicResource ApplicationBackgroundBrush}"
                     Padding="24,16">
                 <Grid>
                     <!-- Profiles Page -->
                     <Grid x:Name="ProfilesPage" Visibility="Visible">
-                        <Grid.RowDefinitions>
-                            <RowDefinition Height="Auto" />
-                            <RowDefinition Height="Auto" />
-                            <RowDefinition Height="*" />
-                            <RowDefinition Height="Auto" />
+                             <Grid.RowDefinitions>
+                                 <RowDefinition Height="Auto" />
+                                 <RowDefinition Height="*" />
                         </Grid.RowDefinitions>
 
                         <!-- No Selection State -->
@@ -201,11 +206,12 @@
                                        HorizontalAlignment="Center" />
                         </StackPanel>
 
-                        <!-- Profile Detail View -->
+                        <!-- Profile Detail View (fills remaining space after NoSelectionPanel) -->
                         <Grid x:Name="ProfileDetailPanel"
-                              Grid.Row="0"
+                              Grid.Row="1"
                               Visibility="Collapsed">
                             <Grid.RowDefinitions>
+                                <RowDefinition Height="Auto" />
                                 <RowDefinition Height="Auto" />
                                 <RowDefinition Height="Auto" />
                                 <RowDefinition Height="*" />
@@ -242,6 +248,13 @@
                                               Click="OnDeactivateProfile"
                                               Visibility="Collapsed"
                                               Margin="0,0,8,0" />
+                                    <ui:Button x:Name="ApplyBtn"
+                                              Content="Apply"
+                                              Icon="{ui:SymbolIcon ArrowSync24}"
+                                              Appearance="Secondary"
+                                              Click="OnApplyProfile"
+                                              Visibility="Collapsed"
+                                              Margin="0,0,8,0" />
                                     <ui:Button x:Name="DeleteBtn"
                                               Icon="{ui:SymbolIcon Delete24}"
                                               Appearance="Danger"
@@ -249,8 +262,50 @@
                                 </StackPanel>
                             </Grid>
 
+                            <ui:CardControl Grid.Row="1" Margin="0,0,0,12" Padding="12">
+                                <ui:CardControl.Header>
+                                    <StackPanel>
+                                        <TextBlock Text="Processing chain"
+                                                   FontSize="13"
+                                                   FontWeight="SemiBold" />
+                                        <Grid Margin="0,8,0,0">
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="*" />
+                                                <ColumnDefinition Width="Auto" />
+                                                <ColumnDefinition Width="*" />
+                                                <ColumnDefinition Width="Auto" />
+                                                <ColumnDefinition Width="*" />
+                                            </Grid.ColumnDefinitions>
+                                            <StackPanel>
+                                                <TextBlock Text="1 · Headphone correction" FontSize="10"
+                                                           Foreground="{DynamicResource TextFillColorSecondaryBrush}" />
+                                                <TextBlock x:Name="HeadphoneLayerNameText" Text="Not selected"
+                                                           FontSize="12" FontWeight="SemiBold" TextTrimming="CharacterEllipsis" />
+                                            </StackPanel>
+                                            <ui:SymbolIcon Grid.Column="1" Symbol="ChevronRight24" Margin="10,0" VerticalAlignment="Center" />
+                                            <StackPanel Grid.Column="2">
+                                                <TextBlock Text="2 · Application tuning" FontSize="10"
+                                                           Foreground="{DynamicResource TextFillColorSecondaryBrush}" />
+                                                <TextBlock x:Name="ApplicationLayerNameText" FontSize="12"
+                                                           FontWeight="SemiBold" TextTrimming="CharacterEllipsis" />
+                                            </StackPanel>
+                                            <ui:SymbolIcon Grid.Column="3" Symbol="ChevronRight24" Margin="10,0" VerticalAlignment="Center" />
+                                            <StackPanel Grid.Column="4">
+                                                <TextBlock Text="Output" FontSize="10"
+                                                           Foreground="{DynamicResource TextFillColorSecondaryBrush}" />
+                                                <TextBlock x:Name="LayerChainStatusText" Text="Ready"
+                                                           FontSize="12" FontWeight="SemiBold" />
+                                            </StackPanel>
+                                        </Grid>
+                                        <TextBlock Text="The headphone profile corrects the device globally. This application profile adds only purpose-specific fine-tuning on top."
+                                                   FontSize="10" TextWrapping="Wrap" Margin="0,8,0,0"
+                                                   Foreground="{DynamicResource TextFillColorSecondaryBrush}" />
+                                    </StackPanel>
+                                </ui:CardControl.Header>
+                            </ui:CardControl>
+
                             <!-- In-Game Tips Card -->
-                            <ui:CardControl Grid.Row="1" Margin="0,0,0,12">
+                            <ui:CardControl Grid.Row="2" Margin="0,0,0,12">
                                 <ui:CardControl.Header>
                                     <StackPanel>
                                         <TextBlock Text="In-Game Audio Settings"
@@ -266,7 +321,7 @@
                             </ui:CardControl>
 
                             <!-- EQ Sliders -->
-                            <ScrollViewer Grid.Row="2"
+                            <ScrollViewer Grid.Row="3"
                                           VerticalScrollBarVisibility="Auto"
                                           HorizontalScrollBarVisibility="Disabled">
                                 <ItemsControl x:Name="SoundCategoriesPanel">
@@ -294,8 +349,9 @@
                                                                        Foreground="{DynamicResource TextFillColorSecondaryBrush}"
                                                                        TextTrimming="CharacterEllipsis" />
                                                         </StackPanel>
-                                                        <TextBlock Grid.Column="2"
-                                                                   x:Name="SliderValueText"
+                                                         <TextBlock Grid.Column="2"
+                                                                    x:Name="SliderValueText"
+                                                                    Text="{Binding SliderValueText}"
                                                                    FontSize="12"
                                                                    FontWeight="SemiBold"
                                                                    HorizontalAlignment="Right"
@@ -306,8 +362,8 @@
                                                 </ui:CardControl.Header>
                                                 <Slider Minimum="-12"
                                                         Maximum="12"
-                                                        Value="{Binding SliderValue}"
-                                                        Width="200"
+                                                        Value="{Binding SliderValue, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+                                                        HorizontalAlignment="Stretch"
                                                         TickFrequency="1"
                                                         IsSnapToTickEnabled="True"
                                                         VerticalAlignment="Center" />
@@ -318,7 +374,7 @@
                             </ScrollViewer>
 
                             <!-- Preamp -->
-                            <ui:CardControl Grid.Row="3" Margin="0,8,0,0" Padding="8">
+                            <ui:CardControl Grid.Row="4" Margin="0,8,0,0" Padding="8">
                                 <ui:CardControl.Header>
                                     <Grid>
                                         <Grid.ColumnDefinitions>
@@ -437,7 +493,7 @@
             </Border>
 
             <!-- Status Bar -->
-            <Border Grid.Column="0"
+            <Border Grid.Row="1" Grid.Column="0"
                     Grid.ColumnSpan="2"
                     VerticalAlignment="Bottom"
                     Background="{DynamicResource CardBackgroundFillColorDefaultBrush}"
@@ -452,7 +508,7 @@
                     </Grid.ColumnDefinitions>
                     <StackPanel Grid.Column="0" Orientation="Horizontal">
                         <Ellipse Width="8" Height="8"
-                                 Fill="{DynamicResource SystemAccentColor}"
+                                 Fill="{DynamicResource SystemAccentBrush}"
                                  Margin="0,0,8,0"
                                  VerticalAlignment="Center" />
                         <TextBlock x:Name="StatusLabel"
@@ -470,7 +526,7 @@
                 </Grid>
             </Border>
 
-            <ui:SnackbarPresenter Grid.Row="1" x:Name="SnackbarPresenter" />
+            <ui:SnackbarPresenter Grid.Row="0" Grid.Column="1" x:Name="SnackbarPresenter" />
         </Grid>
     </Grid>
 </ui:FluentWindow>

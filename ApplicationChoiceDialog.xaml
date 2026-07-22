@@ -1,0 +1,32 @@
+<ui:FluentWindow x:Class="EQAPO_Configurator.ApplicationChoiceDialog"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:ui="http://schemas.lepo.co/wpfui/2022/xaml"
+        Title="Choose active application" Width="480" Height="360"
+        WindowStartupLocation="CenterOwner" ResizeMode="NoResize"
+        ExtendsContentIntoTitleBar="True"
+        Background="{DynamicResource ApplicationBackgroundBrush}">
+    <Grid>
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
+        </Grid.RowDefinitions>
+        <ui:TitleBar Title="Choose active application" ShowMaximize="False" />
+        <TextBlock Grid.Row="1" Margin="20,12,20,8" TextWrapping="Wrap"
+                   Text="More than one configured application is running. Choose which EQ profile should be active." />
+        <ListBox Grid.Row="2" Margin="16,4,16,16" ItemsSource="{Binding Profiles}" SelectionChanged="OnSelected">
+            <ListBox.ItemTemplate>
+                <DataTemplate>
+                    <Border Padding="12" Margin="2" CornerRadius="6">
+                        <StackPanel>
+                            <TextBlock Text="{Binding Name}" FontWeight="SemiBold" />
+                            <TextBlock Text="{Binding ExecutableName}" FontSize="11"
+                                       Foreground="{DynamicResource TextFillColorSecondaryBrush}" />
+                        </StackPanel>
+                    </Border>
+                </DataTemplate>
+            </ListBox.ItemTemplate>
+        </ListBox>
+    </Grid>
+</ui:FluentWindow>

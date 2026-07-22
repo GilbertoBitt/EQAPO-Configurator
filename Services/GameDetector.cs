@@ -6,8 +6,9 @@ namespace EQAPO_Configurator.Services;
 
 public static class GameDetector
 {
-    public static GameProfile? DetectRunningGame(List<GameProfile> profiles)
+    public static List<GameProfile> DetectRunningGames(List<GameProfile> profiles)
     {
+        var matches = new Dictionary<Guid, GameProfile>();
         try
         {
             var processes = Process.GetProcesses();
@@ -15,13 +16,20 @@ public static class GameDetector
             {
                 try
                 {
-                    string procName = proc.ProcessName.ToLower();
+                    string procName = proc.ProcessName;
+                    string? processPath = null;
+                    try { processPath = proc.MainModule?.FileName; } catch { }
                     foreach (var profile in profiles)
                     {
-                        string exeName = Path.GetFileNameWithoutExtension(profile.GameExe).ToLower();
-                        if (procName == exeName || procName == profile.GameExe.ToLower().Replace(".exe", ""))
+                        bool pathMatch = !string.IsNullOrWhiteSpace(profile.ExecutablePath)
+                            && !string.IsNullOrWhiteSpace(processPath)
+                            && string.Equals(Path.GetFullPath(profile.ExecutablePath), Path.GetFullPath(processPath), StringComparison.OrdinalIgnoreCase);
+                        bool nameMatch = string.Equals(procName, Path.GetFileNameWithoutExtension(profile.ExecutableName), StringComparison.OrdinalIgnoreCase);
+                        if (pathMatch || nameMatch)
                         {
-                            return profile;
+                            GameProfile selected = profiles.FirstOrDefault(p =>
+                                p.ApplicationId == profile.ApplicationId && p.IsDefaultForApplication) ?? profile;
+                            matches.TryAdd(selected.ApplicationId, selected);
                         }
                     }
                 }
@@ -29,8 +37,10 @@ public static class GameDetector
             }
         }
         catch { }
-        return null;
+        return matches.Values.ToList();
     }
+
+    public static GameProfile? DetectRunningGame(List<GameProfile> profiles) => DetectRunningGames(profiles).FirstOrDefault();
 
     public static List<string> GetRunningProcesses()
     {

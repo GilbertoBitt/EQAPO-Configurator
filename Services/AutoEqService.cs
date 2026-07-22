@@ -24,7 +24,6 @@ public class HeadphoneEqProfile
 
 public static class AutoEqService
 {
-    private static readonly string EqapoConfigPath = @"C:\Program Files\EqualizerAPO\config";
     private static readonly string HeadphonesDir = Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
         "EQAPO-Configurator", "headphones");
@@ -65,6 +64,7 @@ public static class AutoEqService
         public string Name { get; set; } = "";
         public string RelativePath { get; set; } = ""; // e.g. "./oratory1990/over-ear/Sennheiser HD 600/"
         public string Source { get; set; } = "";
+        public string DownloadUrl { get; set; } = "";
     }
 
     /// <summary>
@@ -128,11 +128,13 @@ public static class AutoEqService
                 if (sourceMatch.Success)
                     source = sourceMatch.Groups[1].Value.Trim();
 
+                string encodedPath = mdMatch.Groups[2].Value.Trim().TrimEnd('/');
                 entries.Add(new ReadmeEntry
                 {
                     Name = name,
                     RelativePath = relPath,
                     Source = source,
+                    DownloadUrl = BuildDownloadUrl(encodedPath),
                 });
                 continue;
             }
@@ -149,11 +151,13 @@ public static class AutoEqService
                 if (sourceMatch.Success)
                     source = sourceMatch.Groups[1].Value.Trim();
 
+                string encodedPath = htmlMatch.Groups[1].Value.Trim().TrimEnd('/');
                 entries.Add(new ReadmeEntry
                 {
                     Name = name,
                     RelativePath = relPath,
                     Source = source,
+                    DownloadUrl = BuildDownloadUrl(encodedPath),
                 });
             }
         }
@@ -176,27 +180,48 @@ public static class AutoEqService
             return new List<HeadphoneSearchResult>();
 
         var entries = await GetReadmeEntriesAsync();
-        var results = new List<HeadphoneSearchResult>();
-
-        foreach (var entry in entries)
-        {
-            if (entry.Name.Contains(query, StringComparison.OrdinalIgnoreCase))
+        string normalizedQuery = Normalize(query);
+        string[] tokens = normalizedQuery.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+        return entries
+            .Select(entry => new { Entry = entry, Score = Score(entry.Name, tokens, normalizedQuery) })
+            .Where(x => x.Score > 0)
+            .OrderByDescending(x => x.Score)
+            .ThenBy(x => x.Entry.Name.Length)
+            .GroupBy(x => Normalize(x.Entry.Name))
+            .Select(g => g.First().Entry)
+            .Take(25)
+            .Select(entry =>
             {
-                string rawUrl = $"{AutoEqRawBase}/{entry.RelativePath.TrimStart('.').TrimStart('/')}/{Uri.EscapeDataString(entry.Name)}%20ParametricEQ.txt";
-
-                results.Add(new HeadphoneSearchResult
+                return new HeadphoneSearchResult
                 {
                     Name = entry.Name,
                     Type = DetectType(entry.RelativePath),
                     MeasurementSource = entry.Source,
-                    DownloadUrl = rawUrl,
-                });
+                    DownloadUrl = entry.DownloadUrl,
+                };
+            }).ToList();
+    }
 
-                if (results.Count >= 25) break;
-            }
+    private static int Score(string name, string[] tokens, string normalizedQuery)
+    {
+        string normalized = Normalize(name);
+        if (normalized == normalizedQuery) return 1000;
+        int score = normalized.StartsWith(normalizedQuery, StringComparison.Ordinal) ? 500 : 0;
+        foreach (string token in tokens)
+        {
+            int index = normalized.IndexOf(token, StringComparison.Ordinal);
+            if (index < 0) return 0;
+            score += index == 0 ? 120 : 60 - Math.Min(index, 40);
         }
+        return score;
+    }
 
-        return results;
+    private static string Normalize(string value) => Regex.Replace(value.ToLowerInvariant(), @"[^a-z0-9]+", " ").Trim();
+
+    private static string BuildDownloadUrl(string encodedDirectoryPath)
+    {
+        string directoryName = encodedDirectoryPath.Split('/').Last();
+        return $"{AutoEqRawBase}/{encodedDirectoryPath}/{directoryName}%20ParametricEQ.txt";
     }
 
     /// <summary>
@@ -218,7 +243,10 @@ public static class AutoEqService
                 return profile;
             }
         }
-        catch { }
+        catch (HttpRequestException ex)
+        {
+            throw new InvalidOperationException($"AutoEQ download failed ({ex.StatusCode}): {headphone.Name}", ex);
+        }
 
         return null;
     }
@@ -374,8 +402,12 @@ public static class AutoEqService
 
     public static string ExportToEqualizerApo(HeadphoneEqProfile profile)
     {
-        string filename = $"headphone_{profile.HeadphoneName.Replace(" ", "_").ToLower()}.txt";
-        string filePath = Path.Combine(EqapoConfigPath, filename);
+        string eqapoConfigPath = EqualizerApoService.ResolveInstallation()?.ConfigPath
+            ?? throw new DirectoryNotFoundException("EqualizerAPO is not installed.");
+        string safeName = string.Concat(profile.HeadphoneName.Select(c => Path.GetInvalidFileNameChars().Contains(c) ? '_' : c))
+            .Replace(" ", "_").ToLowerInvariant();
+        string filename = $"headphone_{safeName}.txt";
+        string filePath = Path.Combine(eqapoConfigPath, filename);
         File.WriteAllText(filePath, profile.RawText, Encoding.UTF8);
         return filename;
     }

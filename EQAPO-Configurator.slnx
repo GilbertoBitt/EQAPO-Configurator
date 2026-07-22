@@ -1,0 +1,5 @@
+<Solution>
+  <Project Path="EQAPO-Configurator.csproj" />
+  <Project Path="EQAPO-Configurator.Tests/EQAPO-Configurator.Tests.csproj" />
+  <Project Path="EQAPO-Overlay/EQAPO-Overlay.csproj" />
+</Solution>

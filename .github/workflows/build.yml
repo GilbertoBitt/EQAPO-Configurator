@@ -63,13 +63,29 @@ jobs:
           Remove-Item "$embedDir\Lib\site-packages\pip" -Recurse -Force -ErrorAction SilentlyContinue
 
       - name: Restore
-        run: dotnet restore
+        run: dotnet restore EQAPO-Configurator.slnx
 
       - name: Build
-        run: dotnet build --configuration Release --no-restore
+        run: dotnet build EQAPO-Configurator.slnx --configuration Release --no-restore
 
-      - name: Upload artifact
+      - name: Test
+        run: dotnet test EQAPO-Configurator.slnx --configuration Release --no-build --logger "trx;LogFileName=test-results.trx"
+
+      - name: Upload build artifact
         uses: actions/upload-artifact@v4
         with:
           name: EQAPO-Configurator-win-x64
           path: bin/Release/net10.0-windows/
+
+      - name: Upload overlay artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: EQAPO-Overlay-win-x64
+          path: EQAPO-Overlay/bin/Release/net10.0-windows/
+
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-results
+          path: '**/TestResults/*.trx'

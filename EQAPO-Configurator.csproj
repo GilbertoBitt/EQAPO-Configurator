@@ -14,8 +14,26 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <Compile Remove="EQAPO-Configurator.Tests\**" />
+    <Compile Remove="EQAPO-Overlay\**" />
+    <EmbeddedResource Remove="EQAPO-Configurator.Tests\**" />
+    <EmbeddedResource Remove="EQAPO-Overlay\**" />
+    <None Remove="EQAPO-Configurator.Tests\**" />
+    <None Remove="EQAPO-Overlay\**" />
+  </ItemGroup>
+
+  <ItemGroup>
     <PackageReference Include="Extended.Wpf.Toolkit" Version="5.1.2" />
+    <PackageReference Include="MessagePack" Version="3.1.8" />
+    <PackageReference Include="Microsoft.Extensions.DependencyInjection" Version="11.0.0-preview.6.26359.118" />
+    <PackageReference Include="Microsoft.Extensions.Logging" Version="11.0.0-preview.6.26359.118" />
+    <PackageReference Include="R3" Version="1.3.1" />
+    <PackageReference Include="System.Text.Json" Version="11.0.0-preview.6.26359.118" />
     <PackageReference Include="WPF-UI" Version="4.3.0" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="EQAPO-Overlay\EQAPO-Overlay.csproj" />
   </ItemGroup>
 
   <ItemGroup>
@@ -32,6 +50,14 @@
       <PythonFiles Include="$(BundledPythonDir)\**\*" />
     </ItemGroup>
     <Copy SourceFiles="@(PythonFiles)" DestinationFiles="@(PythonFiles->'$(OutputPath)python\embedded\%(RecursiveDir)%(Filename)%(Extension)')" SkipUnchangedFiles="true" />
+  </Target>
+
+  <!-- Copy EQAPO-Overlay executable and dependencies to output -->
+  <Target Name="CopyOverlay" AfterTargets="Build">
+    <ItemGroup>
+      <OverlayOutputDir Include="$(MSBuildProjectDirectory)\EQAPO-Overlay\bin\$(Configuration)\$(TargetFramework)\**\*" />
+    </ItemGroup>
+    <Copy SourceFiles="@(OverlayOutputDir)" DestinationFiles="@(OverlayOutputDir->'$(OutputPath)%(RecursiveDir)%(Filename)%(Extension)')" SkipUnchangedFiles="true" />
   </Target>
 
 </Project>

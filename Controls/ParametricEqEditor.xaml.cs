@@ -23,6 +23,13 @@ public partial class ParametricEqEditor : UserControl
         Loaded += OnLoaded;
     }
 
+    public IReadOnlyList<EqBand> GetBands() => _profile.Bands.AsReadOnly();
+
+    public void UpdateSpectrum(SpectrumFrame frame)
+    {
+        LiveSpectrum?.UpdateFrame(frame);
+    }
+
     private void OnLoaded(object sender, RoutedEventArgs e)
     {
         LoadProfile(_profile);
@@ -36,6 +43,7 @@ public partial class ParametricEqEditor : UserControl
         PreampSlider.Value = _profile.Preamp;
         PreampValueText.Text = _profile.PreampDisplay;
         UpdateBandCount();
+        LiveSpectrum?.SetEqBands(_profile.Bands);
         DrawCurve();
     }
 
@@ -233,7 +241,8 @@ public partial class ParametricEqEditor : UserControl
     private void OnPreampChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
     {
         _profile.Preamp = e.NewValue;
-        PreampValueText.Text = _profile.PreampDisplay;
+        if (PreampValueText != null)
+            PreampValueText.Text = _profile.PreampDisplay;
     }
 
     private void UpdateBandCount()

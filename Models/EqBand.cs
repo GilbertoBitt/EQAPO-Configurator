@@ -22,6 +22,7 @@ public class EqBand : INotifyPropertyChanged
     private double _gain;
     private double _q = 1.0;
     private bool _enabled = true;
+    private double _bandLevelDb = -80;
 
     public int Index
     {
@@ -61,8 +62,19 @@ public class EqBand : INotifyPropertyChanged
         set { _enabled = value; OnPropertyChanged(); }
     }
 
+    /// <summary>
+    /// Real-time audio level at this band's center frequency (dB).
+    /// Updated by the spectrum analyzer each frame.
+    /// </summary>
+    public double BandLevelDb
+    {
+        get => _bandLevelDb;
+        set { _bandLevelDb = value; OnPropertyChanged(); }
+    }
+
     public string FrequencyDisplay => Frequency >= 1000 ? $"{Frequency / 1000:F1}k" : $"{Frequency:F0}";
     public string GainDisplay => $"{Gain:+0.0;-0.0;0.0} dB";
+    public string BandLevelDisplay => BandLevelDb > -70 ? $"{BandLevelDb:F0} dB" : "";
 
     public string ToEqaPoString()
     {

@@ -1,9 +1,16 @@
+using System.IO;
+
 namespace EQAPO_Configurator.Models;
 
 public class GameProfile
 {
+    public Guid Id { get; set; } = Guid.NewGuid();
+    public Guid ApplicationId { get; set; } = Guid.NewGuid();
     public string Name { get; set; } = "";
     public string GameExe { get; set; } = "";
+    public string ExecutablePath { get; set; } = "";
+    public bool IsDefaultForApplication { get; set; } = true;
+    public bool IsGlobalDefault { get; set; }
     public string Description { get; set; } = "";
     public string ConfigFileName { get; set; } = "";
     public GameGenre Genre { get; set; } = GameGenre.FPS;
@@ -26,6 +33,9 @@ public class GameProfile
             InGameSettings = GetGameInGameTips(name, genre),
         };
     }
+
+    public string ExecutableName => Path.GetFileName(
+        string.IsNullOrWhiteSpace(ExecutablePath) ? GameExe : ExecutablePath);
 
     private static double GetGenrePreamp(GameGenre genre) => genre switch
     {
